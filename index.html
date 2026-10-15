@@ -104,6 +104,14 @@ button{cursor:pointer}
 #outliner li:hover{background:var(--raised)}
 #outliner li.on{background:var(--raised-2);box-shadow:inset 2px 0 0 var(--accent)}
 #outliner li.multi{background:var(--raised);box-shadow:inset 2px 0 0 var(--sel)}
+/* Shift + clique na lista soma objetos: sem isso o navegador selecionava o texto */
+#outliner,#tools,#top,#vpTop,#tabs,#status,#brushBar,.ph{user-select:none;-webkit-user-select:none}
+#top input,#brushBar input{user-select:text;-webkit-user-select:text}
+.abtag{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:5px;font:600 11px var(--f-mono);flex:none}
+.abtag.a{background:var(--accent);color:var(--accent-ink)}
+.abtag.b{background:var(--sel);color:#0b1724}
+#abLayer{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+#abLayer .abtag{position:absolute;transform:translate(-50%,-100%);box-shadow:0 2px 8px rgba(0,0,0,.45)}
 #outliner li .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #outliner li .ty{font:10px var(--f-mono);color:var(--muted)}
 #outliner li input{flex:1;min-width:0;background:var(--ground);border:1px solid var(--sel);border-radius:4px;padding:1px 4px}
@@ -265,6 +273,7 @@ input[type=color]{width:100%;height:26px;border:1px solid var(--line);border-rad
     <div id="modeBadge">Objeto</div>
     <div id="selrect" hidden></div>
     <div id="opPanel" hidden></div>
+    <div id="abLayer"></div>
     <div id="brushBar" hidden>
       <div class="seg" id="brushModes" role="group" aria-label="Tipo de pincel">
         <button data-bm="draw" class="on" title="Levanta a superfície por onde passa (Ctrl afunda)">Puxar</button><button data-bm="grab" title="Agarra a área e arrasta junto com o dedo/mouse">Arrastar</button><button data-bm="inflate" title="Incha para fora, cada ponto na sua direção">Inflar</button><button data-bm="smooth" title="Alisa calombos">Suavizar</button><button data-bm="flatten" title="Achata contra o plano tocado">Achatar</button>
@@ -881,7 +890,31 @@ function selectObject(o, add = false) {
   // caixas azuis nos outros objetos da seleção
   while (multiBoxes.length) { const b = multiBoxes.pop(); scene.remove(b); b.geometry.dispose(); }
   for (const x of state.multi) if (x !== o) { const b = new THREE.BoxHelper(x.mesh, 0x62a9e4); b.userData.obj = x; scene.add(b); multiBoxes.push(b); }
+  if (add && state.multi.length >= 2) {
+    state.tab = 'obj';   // os botões das booleanas ficam na aba Objeto
+    const [A, ...Bs] = state.multi;
+    toast(`${state.multi.length} objetos selecionados · A = “${A.name}”, B = ${Bs.map(b => `“${b.name}”`).join(', ')}. Use “A corta B” no painel.`);
+  }
+  buildAbTags();
   renderOutliner(); renderPanel(); refreshStatus();
+}
+// etiquetas "A" e "B" flutuando em cima dos objetos selecionados (quando há 2 ou mais)
+let abTags = [];
+function buildAbTags() {
+  const layer = $('#abLayer'); layer.replaceChildren(); abTags = [];
+  if (state.multi.length < 2 || state.mode !== 'object') return;
+  state.multi.forEach((o, i) => { const t = el('span', { class: 'abtag ' + (i ? 'b' : 'a') }, i ? 'B' : 'A'); layer.append(t); abTags.push({ o, t }); });
+}
+const _abBox = new THREE.Box3(), _abV = new THREE.Vector3();
+function placeAbTags() {
+  if (!abTags.length) return;
+  const r = renderer.domElement.getBoundingClientRect();
+  for (const { o, t } of abTags) {
+    _abBox.setFromObject(o.mesh); _abBox.getCenter(_abV); _abV.y = _abBox.max.y; _abV.project(camera);
+    const vis = _abV.z < 1 && o.mesh.visible;
+    t.style.display = vis ? '' : 'none';
+    if (vis) { t.style.left = ((_abV.x + 1) / 2 * r.width) + 'px'; t.style.top = ((1 - _abV.y) / 2 * r.height - 4) + 'px'; }
+  }
 }
 
 /* ================= Modo edição (vértices) ================= */
@@ -975,7 +1008,7 @@ function enterEdit() {
   o.mesh.add(edit.lineAll, edit.lineSel);
   buildEditData();
   boxHelper.visible = false; transform.detach();
-  updateModeUI(); renderPanel(); refreshStatus();
+  buildAbTags(); updateModeUI(); renderPanel(); refreshStatus();
 }
 function exitEdit() {
   if (state.mode !== 'edit') return;
@@ -989,7 +1022,7 @@ function exitEdit() {
   if (brush.on) setBrush(false, true);
   transform.detach(); state.mode = 'object'; edit.obj = null; edit.sel.clear(); edit.box = false;
   if (state.selected) { transform.attach(state.selected.mesh); boxHelper.setFromObject(state.selected.mesh); boxHelper.visible = true; }
-  updateModeUI(); renderPanel(); refreshStatus();
+  buildAbTags(); updateModeUI(); renderPanel(); refreshStatus();
 }
 function toggleEdit() { state.mode === 'edit' ? exitEdit() : enterEdit(); }
 
@@ -2397,6 +2430,7 @@ function renderOutliner() {
           onblur: () => { const v = inp.value.trim(); if (v && v !== o.name) { o.name = v; commit(); } renderOutliner(); renderPanel(); } });
         nm.replaceWith(inp); inp.focus(); inp.select();
       } },
+      state.multi.length >= 2 && state.multi.includes(o) ? el('span', { class: 'abtag ' + (state.multi[0] === o ? 'a' : 'b') }, state.multi[0] === o ? 'A' : 'B') : null,
       el('span', { class: 'dot', style: o.prim === 'light' ? `background:${o.light.color};border-radius:50%` : m ? swatchStyle(m) : '' }), nm,
       el('span', { class: 'ty' }, o.prim === 'light' ? 'luz · ' + LIGHTS[o.light.type].short : o.prim === 'custom' ? 'malha' : PRIMS[o.prim].label.toLowerCase()), eye);
     ul.append(li);
@@ -2408,7 +2442,7 @@ function refreshStatus() {
   let nl = 0;
   for (const o of state.objects) { if (o.prim === 'light') { nl++; continue; } const g = o.mesh.geometry; v += g.attributes.position.count; t += (g.index ? g.index.count : g.attributes.position.count) / 3; }
   $('#stCounts').textContent = `${state.objects.length - nl} objetos${nl ? ` · ${nl} luz${nl > 1 ? 'es' : ''}` : ''} · ${v.toLocaleString('pt-BR')} vértices · ${Math.round(t).toLocaleString('pt-BR')} triângulos`;
-  $('#stSel').textContent = state.mode === 'edit' ? `${edit.sel.size} vértice(s) selecionado(s)` : state.selected ? `Selecionado: ${state.selected.name}` : '';
+  $('#stSel').textContent = state.mode === 'edit' ? `${edit.sel.size} vértice(s) selecionado(s)` : state.multi.length >= 2 ? `${state.multi.length} objetos selecionados · A: ${state.multi[0].name}` : state.selected ? `Selecionado: ${state.selected.name}` : '';
   $('#stMode').textContent = { translate: 'Mover', rotate: 'Girar', scale: 'Escalar' }[state.tool] + (state.snap ? ' · ímã' : '');
   if (brush.on) $('#stSel').textContent = `Pincel: ${$('#brushModes .on')?.textContent || ''}`;
   $('#hint').innerHTML = brush.on
@@ -2622,6 +2656,7 @@ renderer.setAnimationLoop(() => {
   orbit.update();
   if (boxHelper.visible && state.selected) boxHelper.update();
   for (const b of multiBoxes) b.update();
+  placeAbTags();
   renderer.render(scene, camera);
 });
 
