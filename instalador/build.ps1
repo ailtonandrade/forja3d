@@ -16,11 +16,18 @@ Write-Host "== Forja 3D $ver =="
 if (Test-Path $build) { Remove-Item -Recurse -Force $build }
 New-Item -ItemType Directory -Force $app | Out-Null
 
-# app: o mesmo index.html da versão web, só trocando o three.js do CDN pela cópia embutida
+# app: o mesmo index.html da versão web, só trocando as bibliotecas do CDN pelas cópias embutidas
 $html = [IO.File]::ReadAllText("$root\index.html")
-$cdn = 'https://cdn.jsdelivr.net/npm/three@0.160.0/'
-if (-not $html.Contains($cdn)) { throw "index.html não aponta mais para $cdn; atualize o build.ps1 junto." }
-[IO.File]::WriteAllText("$app\index.html", $html.Replace($cdn, './vendor/three/'), (New-Object Text.UTF8Encoding $false))
+$libs = [ordered]@{
+  'https://cdn.jsdelivr.net/npm/three@0.160.0/'          = './vendor/three/'
+  'https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.7.8/'   = './vendor/three-mesh-bvh/'
+  'https://cdn.jsdelivr.net/npm/three-bvh-csg@0.0.17/'   = './vendor/three-bvh-csg/'
+}
+foreach ($k in $libs.Keys) {
+  if (-not $html.Contains($k)) { throw "index.html não aponta mais para $k; atualize o build.ps1 junto." }
+  $html = $html.Replace($k, $libs[$k])
+}
+[IO.File]::WriteAllText("$app\index.html", $html, (New-Object Text.UTF8Encoding $false))
 foreach ($f in 'serve.js', 'abrir.js', 'atualizar.js', 'README.md', 'VERSION') { Copy-Item "$root\$f" $app }
 Copy-Item -Recurse "$root\assets" "$app\assets"
 Copy-Item -Recurse "$root\vendor" "$app\vendor"
@@ -28,10 +35,16 @@ Copy-Item -Recurse "$root\vendor" "$app\vendor"
 # three.js embutido: baixa a versão exata do npm e copia só os arquivos usados
 $tmp = Join-Path $build 'npm'
 New-Item -ItemType Directory -Force $tmp | Out-Null
-npm install three@0.160.0 --prefix $tmp --no-audit --no-fund --no-save --loglevel=error
-if ($LASTEXITCODE -ne 0) { throw 'npm install three falhou' }
+npm install three@0.160.0 three-mesh-bvh@0.7.8 three-bvh-csg@0.0.17 --prefix $tmp --no-audit --no-fund --no-save --loglevel=error
+if ($LASTEXITCODE -ne 0) { throw 'npm install das bibliotecas falhou' }
 node "$PSScriptRoot\vendor-three.js" "$tmp\node_modules\three" "$app\vendor\three"
 if ($LASTEXITCODE -ne 0) { throw 'não deu pra copiar o three.js' }
+# booleanas (A corta B): as duas bibliotecas são ES modules em src/, com imports relativos entre si
+foreach ($pk in 'three-mesh-bvh', 'three-bvh-csg') {
+  New-Item -ItemType Directory -Force "$app\vendor\$pk" | Out-Null
+  Copy-Item -Recurse "$tmp\node_modules\$pk\src" "$app\vendor\$pk\src"
+  Copy-Item "$tmp\node_modules\$pk\LICENSE" "$app\vendor\$pk\"
+}
 Remove-Item -Recurse -Force $tmp
 
 # Node embutido (o mesmo deste PC) + licença dele
@@ -46,6 +59,7 @@ Forja 3D usa software de terceiros:
 
 - three.js 0.160.0 (licença MIT): vendor\three\LICENSE
 - qrcode-generator 1.4.4 (licença MIT, Kazuhiko Arase): vendor\qrcode.min.js
+- three-mesh-bvh 0.7.8 e three-bvh-csg 0.0.17 (licença MIT, Garrett Johnson): vendor\three-mesh-bvh\LICENSE, vendor\three-bvh-csg\LICENSE
 - Node.js $nodeVer (licença MIT e outras): runtime\LICENSE-node.txt
 "@ | Set-Content -Encoding UTF8 "$app\TERCEIROS.txt"
 

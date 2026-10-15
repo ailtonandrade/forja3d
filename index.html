@@ -103,6 +103,7 @@ button{cursor:pointer}
 #outliner li{display:flex;align-items:center;gap:7px;padding:4px 6px;border-radius:5px;cursor:pointer}
 #outliner li:hover{background:var(--raised)}
 #outliner li.on{background:var(--raised-2);box-shadow:inset 2px 0 0 var(--accent)}
+#outliner li.multi{background:var(--raised);box-shadow:inset 2px 0 0 var(--sel)}
 #outliner li .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #outliner li .ty{font:10px var(--f-mono);color:var(--muted)}
 #outliner li input{flex:1;min-width:0;background:var(--ground);border:1px solid var(--sel);border-radius:4px;padding:1px 4px}
@@ -324,7 +325,9 @@ input[type=color]{width:100%;height:26px;border:1px solid var(--line);border-rad
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+  "three-mesh-bvh": "https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.7.8/src/index.js",
+  "three-bvh-csg": "https://cdn.jsdelivr.net/npm/three-bvh-csg@0.0.17/src/index.js"
 } }
 </script>
 <script type="module">
@@ -436,6 +439,7 @@ const state = {
   materials: [],
   textures: {},              // id -> {name, src, img, derived[]}
   selected: null,
+  multi: [],                 // seleção com Shift, na ordem dos cliques (o primeiro é o "A" das booleanas)
   mode: 'object',
   tool: 'translate',
   shading: 'material',
@@ -862,12 +866,21 @@ function deleteSelected() {
   state.objects = state.objects.filter(o => o !== s);
   selectObject(null); commit();
 }
-function selectObject(o) {
+// add = Shift: soma (ou tira) o objeto da seleção, guardando a ordem; o último clicado é o que o gizmo move
+const multiBoxes = [];
+function selectObject(o, add = false) {
   if (state.mode === 'edit' && o !== state.selected) exitEdit();
+  if (add && o && state.mode === 'object') {
+    const i = state.multi.indexOf(o);
+    if (i >= 0) { state.multi.splice(i, 1); o = state.multi[state.multi.length - 1] || null; } else state.multi.push(o);
+  } else state.multi = o ? [o] : [];
   if (o !== state.selected) join.open = false;
   state.selected = o || null;
   if (o && state.mode === 'object') { transform.attach(o.mesh); boxHelper.setFromObject(o.mesh); boxHelper.visible = true; }
   else if (!o) { transform.detach(); boxHelper.visible = false; }
+  // caixas azuis nos outros objetos da seleção
+  while (multiBoxes.length) { const b = multiBoxes.pop(); scene.remove(b); b.geometry.dispose(); }
+  for (const x of state.multi) if (x !== o) { const b = new THREE.BoxHelper(x.mesh, 0x62a9e4); b.userData.obj = x; scene.add(b); multiBoxes.push(b); }
   renderOutliner(); renderPanel(); refreshStatus();
 }
 
@@ -1753,7 +1766,9 @@ renderer.domElement.addEventListener('pointerup', e => {
     selectionChanged(); return;
   }
   const hits = ray.intersectObjects(state.objects.filter(o => o.mesh.visible).map(o => o.pick || o.mesh), false);
-  selectObject(hits.length ? state.objects.find(o => (o.pick || o.mesh) === hits[0].object) : null);
+  const hitObj = hits.length ? state.objects.find(o => (o.pick || o.mesh) === hits[0].object) : null;
+  if (e.shiftKey && !hitObj) return;   // Shift + clique no vazio não desfaz a seleção
+  selectObject(hitObj, e.shiftKey);
 });
 renderer.domElement.addEventListener('dblclick', () => { if (state.selected && state.mode === 'object') toggleEdit(); });
 
@@ -1912,7 +1927,7 @@ function setSaveState(t) { $('#saveState').textContent = t; }
 function scheduleSave() { setSaveState('Alterações não salvas'); clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 900); }
 function captureThumb() {
   try {
-    const hide = [grid, tHelper, boxHelper, edit.points, edit.wire, edit.overlay, brushCursor, ...lightHelpers()].filter(Boolean), vis = hide.map(h => h.visible);
+    const hide = [grid, tHelper, boxHelper, edit.points, edit.wire, edit.overlay, brushCursor, ...lightHelpers(), ...multiBoxes].filter(Boolean), vis = hide.map(h => h.visible);
     hide.forEach(h => h.visible = false);
     renderer.render(scene, camera);
     const src = renderer.domElement, c = document.createElement('canvas'); c.width = 320; c.height = 200;
@@ -2094,6 +2109,7 @@ function renderPanel() {
 }
 function renderObjectTab(box) {
   const o = state.selected;
+  if (state.multi.length >= 2) renderBooleanPanel(box);
   if (!o) { box.append(el('p', { class: 'empty' }, 'Nada selecionado. Clique num objeto do viewport ou da lista acima, ou adicione um com o botão + na barra da esquerda.')); return; }
   const m = o.mesh;
   box.append(el('div', { class: 'grp' },
@@ -2142,6 +2158,58 @@ function renderObjectTab(box) {
         el('button', { class: 'btn', onclick: () => { join.open = false; renderPanel(); } }, 'Cancelar')));
   }
   box.append(jg);
+}
+// ---- operações booleanas (A = primeiro objeto selecionado; B = os outros) ----
+const boolOpt = { del: false };
+function renderBooleanPanel(box) {
+  const [A, ...Bs] = state.multi, names = Bs.map(b => `“${b.name}”`).join(', ');
+  const g = el('div', { class: 'grp', style: 'border:1px solid var(--line);border-radius:8px;padding:10px' },
+    el('h4', {}, `${state.multi.length} objetos selecionados`),
+    el('p', { class: 'note' }, el('b', { style: 'color:var(--fg)' }, 'A'), ` = “${A.name}” (o primeiro que você clicou) · `, el('b', { style: 'color:var(--fg)' }, 'B'), ` = ${names}`),
+    el('div', { class: 'btns' },
+      el('button', { class: 'btn pri', onclick: () => booleanOp('cortar'), title: 'Tira de B o volume de A (ex.: um cilindro abrindo uma janela na parede)' }, 'A corta B'),
+      el('button', { class: 'btn', onclick: () => booleanOp('unir'), title: 'Funde A e B num objeto só, sem as partes de dentro' }, 'Unir A + B'),
+      el('button', { class: 'btn', onclick: () => booleanOp('cruzar'), title: 'Deixa só o pedaço onde A e B se cruzam' }, 'Só o que se cruza')),
+    check('f-booldel', 'Apagar A depois (senão ele fica escondido, para usar de novo)', boolOpt.del, v => boolOpt.del = v),
+    el('p', { class: 'note' }, 'Shift + clique soma ou tira objetos da seleção. O resultado fica no material de B.'));
+  box.append(g);
+}
+async function booleanOp(kind) {
+  const [A, ...Bs] = state.multi;
+  if (!A || !Bs.length) return;
+  if (state.multi.some(o => o.prim === 'light')) { toast('Luzes não entram em operações booleanas. Tire a luz da seleção (Shift + clique).'); return; }
+  let lib;
+  try { lib = await import('three-bvh-csg'); }
+  catch (e) { toast('Não deu para carregar a ferramenta de recorte. Na versão web ela precisa de internet.'); console.error(e); return; }
+  const { Brush, Evaluator, SUBTRACTION, ADDITION, INTERSECTION } = lib;
+  const ev = new Evaluator(); ev.useGroups = false; ev.attributes = ['position', 'uv', 'normal'];
+  const brushOf = o => {
+    o.mesh.updateMatrixWorld();
+    const g = o.mesh.geometry.clone();
+    if (!g.attributes.uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
+    if (!g.attributes.normal) g.computeVertexNormals();
+    const b = new Brush(g); o.mesh.matrixWorld.decompose(b.position, b.quaternion, b.scale); b.updateMatrixWorld();
+    return b;
+  };
+  const op = { cortar: SUBTRACTION, unir: ADDITION, cruzar: INTERSECTION }[kind], a = brushOf(A);
+  let tris = 0;
+  try {
+    for (const B of Bs) {
+      const bb = brushOf(B), res = ev.evaluate(bb, a, op);
+      // o resultado sai em coordenadas do mundo: volta para o espaço do B
+      const g = res.geometry.applyMatrix4(B.mesh.matrixWorld.clone().invert());
+      const ng = buildGeometry({ prim: 'custom' }, { position: Array.from(g.attributes.position.array), uv: Array.from(g.attributes.uv.array), index: g.index ? Array.from(g.index.array) : null });
+      tris += ng.index.count / 3;
+      B.mesh.geometry.dispose(); B.mesh.geometry = ng; B.prim = 'custom'; B.params = null;
+      bb.geometry.dispose(); g.dispose();
+    }
+  } catch (e) { toast('O recorte falhou: ' + (e.message || e) + '. Os dois objetos precisam ser fechados (sem buracos).'); console.error(e); return; }
+  a.geometry.dispose();
+  if (boolOpt.del) { scene.remove(A.mesh); disposeObj(A); state.objects = state.objects.filter(o => o !== A); }
+  else A.mesh.visible = false;
+  selectObject(Bs[0]); commit();
+  const what = { cortar: `“${A.name}” cortou ${Bs.length > 1 ? Bs.length + ' objetos' : '“' + Bs[0].name + '”'}`, unir: 'Objetos unidos', cruzar: 'Ficou só a parte que se cruza' }[kind];
+  toast(`${what} (${tris.toLocaleString('pt-BR')} triângulos). ${boolOpt.del ? '' : `“${A.name}” ficou escondido na lista.`}`);
 }
 function renderLightProps(box, o) {
   const L = o.light, def = LIGHTS[L.type];
@@ -2323,7 +2391,7 @@ function renderOutliner() {
     const eye = el('button', { class: 'eye' + (o.mesh.visible ? '' : ' off'), title: o.mesh.visible ? 'Ocultar' : 'Mostrar', onclick: e => { e.stopPropagation(); o.mesh.visible = !o.mesh.visible; if (!o.mesh.visible && state.selected === o) selectObject(null); commit(); } });
     eye.innerHTML = '<svg viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
     const nm = el('span', { class: 'nm' }, o.name);
-    const li = el('li', { class: state.selected === o ? 'on' : '', onclick: () => selectObject(o),
+    const li = el('li', { class: state.selected === o ? 'on' : state.multi.includes(o) ? 'multi' : '', onclick: e => selectObject(o, e.shiftKey),
       ondblclick: () => {
         const inp = el('input', { value: o.name, onkeydown: e => { if (e.key === 'Enter') inp.blur(); if (e.key === 'Escape') { inp.value = o.name; inp.blur(); } e.stopPropagation(); },
           onblur: () => { const v = inp.value.trim(); if (v && v !== o.name) { o.name = v; commit(); } renderOutliner(); renderPanel(); } });
@@ -2553,6 +2621,7 @@ new ResizeObserver(() => {
 renderer.setAnimationLoop(() => {
   orbit.update();
   if (boxHelper.visible && state.selected) boxHelper.update();
+  for (const b of multiBoxes) b.update();
   renderer.render(scene, camera);
 });
 
