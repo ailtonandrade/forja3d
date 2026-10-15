@@ -20,7 +20,7 @@ const ping = () => new Promise(resolve => {
     spawn(process.execPath, [path.join(__dirname, 'serve.js'), String(PORT), '--auto-fechar'], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
     for (let i = 0; i < 40 && !(await ping()); i++) await wait(150);
   }
-  // node abrir.js --rede: já libera o acesso pelo celular (o mesmo que o botão "Celular" do app)
+  // o servidor já sobe com o celular liberado; --rede religa se alguém desligou pelo botão "Celular"
   // depois de uma atualização o instalador chama "abrir.js --servidor": só o servidor, a janela que já estava aberta recarrega sozinha
   if (process.argv.includes('--servidor')) return;
   if (process.argv.includes('--rede')) await new Promise(r => { const q = http.request(URL_APP + 'api/rede?ligar=1', { method: 'POST' }, res => { res.resume(); res.on('end', r); }); q.on('error', r); q.end(); });

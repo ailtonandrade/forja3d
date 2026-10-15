@@ -61,7 +61,8 @@ button{cursor:pointer}
 .tool svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .tool kbd{position:absolute;right:2px;bottom:1px;font:9px var(--f-mono);color:var(--muted)}
 .sep{width:24px;height:1px;background:var(--line);margin:4px 0}
-#addMenu{position:absolute;left:54px;top:150px;z-index:30;min-width:180px}
+/* right:auto desfaz o right:0 do .dd: com left definido, os dois juntos esticavam o menu até a borda da tela */
+#addMenu{position:absolute;left:54px;right:auto;top:150px;z-index:30;min-width:220px;max-width:280px;max-height:calc(100% - 16px);overflow-y:auto}
 
 /* viewport */
 #viewport{grid-area:vp;position:relative;min-width:0;min-height:0;background:#000;overflow:hidden;touch-action:none}
@@ -87,6 +88,11 @@ button{cursor:pointer}
 .qr .code svg{width:190px;height:190px}
 .qr .urls{display:flex;flex-direction:column;gap:6px;min-width:0;flex:1}
 .qr .urls b{font:500 16px var(--f-mono);word-break:break-all;color:var(--fg)}
+#opPanel{position:absolute;left:50%;transform:translateX(-50%);bottom:44px;max-width:calc(100% - 20px);display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;padding:8px 12px;background:rgba(20,23,28,.92);border:1px solid var(--accent);border-radius:9px;backdrop-filter:blur(6px);z-index:6}
+#opPanel b{font-weight:600;color:var(--accent)}
+#opPanel label{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+#opPanel input[type=range]{width:120px;accent-color:var(--accent)}
+#opPanel .seg{background:transparent}
 #selrect{position:absolute;border:1px dashed var(--sel);background:rgba(98,169,228,.12);pointer-events:none}
 
 /* painel */
@@ -183,6 +189,7 @@ input[type=color]{width:100%;height:26px;border:1px solid var(--line);border-rad
   #vpTop .seg:nth-child(2){display:none}
   .seg button{padding:5px 8px}
   #brushBar{bottom:10px;gap:6px 10px}
+  #opPanel{bottom:10px}
   #brushBar input[type=range]{width:74px}
   #modeBadge{display:none}
 }
@@ -245,6 +252,10 @@ input[type=color]{width:100%;height:26px;border:1px solid var(--line);border-rad
         <button data-sh="solid">Sólido</button><button data-sh="material" class="on">Material</button><button data-sh="wire">Arame</button>
       </div>
       <div class="seg"><button id="btnSnap" title="Encaixe em grade: 0,25 m · 15° · 10%">Ímã</button><button id="btnSpace" title="Eixos do gizmo">Global</button></div>
+      <div class="seg" id="selModeSeg" role="group" aria-label="Selecionar por" hidden>
+        <button data-sm="vert" class="on" title="Selecionar vértices">Vértices</button><button data-sm="edge" title="Selecionar arestas">Arestas</button><button data-sm="face" title="Selecionar faces">Faces</button>
+        <button id="btnExtrude" title="Extrudar a seleção (E)">Extrudar</button><button id="btnCut" title="Cortar em loop (C) · Shift = 2 cortes">Cortar</button>
+      </div>
       <div class="seg" id="viewSeg" role="group" aria-label="Vistas">
         <button data-view="front" title="Vista frontal (1)">Frente</button><button data-view="right" title="Vista lateral (3)">Lado</button><button data-view="top" title="Vista de topo (7)">Topo</button><button data-view="persp" title="Perspectiva (5)">3/4</button>
       </div>
@@ -252,6 +263,7 @@ input[type=color]{width:100%;height:26px;border:1px solid var(--line);border-rad
     <div id="hint"></div>
     <div id="modeBadge">Objeto</div>
     <div id="selrect" hidden></div>
+    <div id="opPanel" hidden></div>
     <div id="brushBar" hidden>
       <div class="seg" id="brushModes" role="group" aria-label="Tipo de pincel">
         <button data-bm="draw" class="on" title="Levanta a superfície por onde passa (Ctrl afunda)">Puxar</button><button data-bm="grab" title="Agarra a área e arrasta junto com o dedo/mouse">Arrastar</button><button data-bm="inflate" title="Incha para fora, cada ponto na sua direção">Inflar</button><button data-bm="smooth" title="Alisa calombos">Suavizar</button><button data-bm="flatten" title="Achata contra o plano tocado">Achatar</button>
@@ -860,7 +872,7 @@ function selectObject(o) {
 }
 
 /* ================= Modo edição (vértices) ================= */
-const edit = { obj: null, groups: [], v2g: null, nb: null, sel: new Set(), points: null, wire: null, pivot: new THREE.Object3D(), startInv: new THREE.Matrix4(), orig: null, affected: [], prop: false, radius: 0.5, amount: 0.08, box: false, xray: false, modified: false, weldDist: 0.01 };
+const edit = { obj: null, groups: [], v2g: null, nb: null, sel: new Set(), points: null, wire: null, pivot: new THREE.Object3D(), startInv: new THREE.Matrix4(), orig: null, affected: [], prop: false, radius: 0.5, amount: 0.08, box: false, xray: false, modified: false, weldDist: 0.01, selMode: 'vert', op: null, topo: null };
 // painel "Juntar objetos": aberto ou não, quais foram marcados e a distância para soldar os vértices encostados
 const join = { open: false, pick: new Set(), dist: 0.01 };
 scene.add(edit.pivot);
@@ -887,9 +899,10 @@ function paintOverlay(weights, color = C_SEL, alpha = 0.6) {
   for (const [g, w] of weights) for (const i of edit.groups[g].idx) { a[i * 4] = color.r; a[i * 4 + 1] = color.g; a[i * 4 + 2] = color.b; a[i * 4 + 3] = alpha * (0.25 + 0.75 * w); }
   col.needsUpdate = true;
 }
-const paintSelection = () => paintOverlay(edit.prop && edit.affected.length ? edit.affected : [...edit.sel].map(g => [g, 1]));
+const paintSelection = () => paintOverlay(edit.selMode === 'edge' ? [] : edit.prop && edit.affected.length ? edit.affected : [...edit.sel].map(g => [g, 1]));
 
 function buildEditData() {
+  edit.topo = null;
   const geo = edit.obj.mesh.geometry, pos = geo.attributes.position;
   const map = new Map(), groups = [], v2g = new Int32Array(pos.count);
   for (let i = 0; i < pos.count; i++) {
@@ -914,10 +927,10 @@ function buildEditData() {
   pointsMat.depthTest = !edit.xray;
   edit.points = new THREE.Points(pg, pointsMat);
   edit.points.renderOrder = 10; edit.points.raycast = () => {};
-  edit.points.visible = !brush.on;
   edit.obj.mesh.add(edit.points);
   buildOverlay();
   syncPoints(); paintPoints();
+  rebuildEdgeLines(); updateEditVisibility();
 }
 function syncPoints() {
   const a = edit.points.geometry.attributes.position;
@@ -941,15 +954,22 @@ function enterEdit() {
   state.mode = 'edit'; edit.obj = o; edit.sel.clear(); edit.modified = false; edit.affected = [];
   ensureIndex(o.mesh.geometry);
   edit.wire = new THREE.Mesh(o.mesh.geometry, new THREE.MeshBasicMaterial({ color: 0x0b0d10, wireframe: true, transparent: true, opacity: 0.4, depthFunc: THREE.LessEqualDepth }));
-  edit.wire.raycast = () => {}; edit.wire.renderOrder = 5;
+  edit.wire.raycast = () => {}; edit.wire.renderOrder = 5; edit.wire.visible = false;
   o.mesh.add(edit.wire);
+  // arestas desenhadas sem as diagonais dos quadrados (escuras) e as selecionadas em destaque
+  edit.lineAll = noRay(new THREE.LineSegments(new THREE.BufferGeometry(), edgeMatAll)); edit.lineAll.renderOrder = 5;
+  edit.lineSel = noRay(new THREE.LineSegments(new THREE.BufferGeometry(), edgeMatSel)); edit.lineSel.renderOrder = 7;
+  o.mesh.add(edit.lineAll, edit.lineSel);
   buildEditData();
   boxHelper.visible = false; transform.detach();
   updateModeUI(); renderPanel(); refreshStatus();
 }
 function exitEdit() {
   if (state.mode !== 'edit') return;
+  if (edit.op) cancelOp();
   const m = edit.obj.mesh;
+  for (const l of [edit.lineAll, edit.lineSel]) if (l) { m.remove(l); l.geometry.dispose(); }
+  edit.lineAll = edit.lineSel = null;
   if (edit.points) { m.remove(edit.points); edit.points.geometry.dispose(); edit.points = null; }
   if (edit.wire) { m.remove(edit.wire); edit.wire.material.dispose(); edit.wire = null; }
   if (edit.overlay) { m.remove(edit.overlay); edit.overlay.geometry.dispose(); edit.overlay = null; }
@@ -962,10 +982,10 @@ function toggleEdit() { state.mode === 'edit' ? exitEdit() : enterEdit(); }
 
 function selectionChanged() {
   edit.affected = edit.prop ? computeAffected() : [];
-  paintPoints(); placePivot(); renderPanel(); refreshStatus();
+  paintPoints(); placePivot(); rebuildEdgeLines(); renderPanel(); refreshStatus();
 }
 function placePivot() {
-  if (!edit.sel.size || brush.on) { transform.detach(); return; }
+  if (!edit.sel.size || brush.on || edit.op) { transform.detach(); return; }
   const c = new THREE.Vector3();
   edit.sel.forEach(g => c.add(edit.groups[g].p)); c.divideScalar(edit.sel.size).applyMatrix4(edit.obj.mesh.matrixWorld);
   edit.pivot.position.copy(c); edit.pivot.rotation.set(0, 0, 0); edit.pivot.scale.set(1, 1, 1); edit.pivot.updateMatrixWorld();
@@ -990,7 +1010,7 @@ function setGroup(g, v) {
 function finishGeo() {
   const geo = edit.obj.mesh.geometry;
   geo.attributes.position.needsUpdate = true; geo.computeVertexNormals(); geo.computeBoundingBox(); geo.computeBoundingSphere();
-  syncPoints();
+  syncPoints(); rebuildEdgeLines();
 }
 function markModified() {
   const o = edit.obj; if (o.prim !== 'custom') { o.prim = 'custom'; o.params = null; }
@@ -1051,6 +1071,323 @@ function subdivide() {
   edit.sel.clear(); markModified(); buildEditData(); selectionChanged(); commit();
   toast(`Malha subdividida: ${out.length / 3} triângulos.`);
 }
+
+/* ================= Topologia: arestas, faces, extrudar e cortar ================= */
+// A malha é feita de triângulos; as primitivas montam cada "quadrado" com dois triângulos que dividem a diagonal.
+// Aqui esses pares viram quadriláteros (faces) e as diagonais deixam de contar como aresta, igual no Blender.
+const EK = 4194304, ekey = (a, b) => a < b ? a * EK + b : b * EK + a;
+function topo() {
+  if (edit.topo) return edit.topo;
+  const ix = edit.obj.mesh.geometry.index.array, v2g = edit.v2g, G = edit.groups, nt = ix.length / 3, edgeTris = new Map();
+  const tg = t => [v2g[ix[t * 3]], v2g[ix[t * 3 + 1]], v2g[ix[t * 3 + 2]]];
+  for (let t = 0; t < nt; t++) { const g = tg(t); for (let k = 0; k < 3; k++) { if (g[k] === g[(k + 1) % 3]) continue; const key = ekey(g[k], g[(k + 1) % 3]); let l = edgeTris.get(key); if (!l) edgeTris.set(key, l = []); l.push(t); } }
+  const len2 = (a, b) => G[a].p.distanceToSquared(G[b].p);
+  const longest = t => { const g = tg(t); let best = 0, bl = -1; for (let k = 0; k < 3; k++) { const l = len2(g[k], g[(k + 1) % 3]); if (l > bl) { bl = l; best = k; } } return ekey(g[best], g[(best + 1) % 3]); };
+  const triN = t => { const g = tg(t), a = G[g[0]].p; return new THREE.Vector3().subVectors(G[g[1]].p, a).cross(new THREE.Vector3().subVectors(G[g[2]].p, a)).normalize(); };
+  const triQuad = new Int32Array(nt).fill(-1), quads = [];
+  for (let t = 0; t < nt; t++) {
+    if (triQuad[t] >= 0) continue;
+    const e = longest(t), l = edgeTris.get(e); if (!l || l.length !== 2) continue;
+    const u = l[0] === t ? l[1] : l[0];
+    if (triQuad[u] >= 0 || longest(u) !== e || triN(t).dot(triN(u)) < 0.9) continue;
+    // gira t para a aresta comum ficar nas duas primeiras posições: quadrado = (y, z, x, w)
+    const gt = tg(t); let r = 0; while (ekey(gt[r], gt[(r + 1) % 3]) !== e) r++;
+    const x = r, y = (r + 1) % 3, z = (r + 2) % 3, gu = tg(u), w = [0, 1, 2].find(k => gu[k] !== gt[x] && gu[k] !== gt[y]);
+    triQuad[t] = triQuad[u] = quads.length;
+    quads.push({ g: [gt[y], gt[z], gt[x], gu[w]], vi: [ix[t * 3 + y], ix[t * 3 + z], ix[t * 3 + x], ix[u * 3 + w]], tris: [t, u], diag: e });
+  }
+  return edit.topo = { edgeTris, triQuad, quads, tg, diag: new Set(quads.map(q => q.diag)) };
+}
+
+// ---- linhas das arestas (todas em escuro, as selecionadas em destaque) ----
+const edgeMatAll = new THREE.LineBasicMaterial({ color: 0x0b0d10, transparent: true, opacity: 0.55, depthFunc: THREE.LessEqualDepth });
+const edgeMatSel = new THREE.LineBasicMaterial({ color: 0xff9a52, depthFunc: THREE.LessEqualDepth });
+function rebuildEdgeLines() {
+  if (!edit.obj || !edit.lineAll) return;
+  const T = topo(), G = edit.groups, all = [], sel = [];
+  for (const k of T.edgeTris.keys()) {
+    if (T.diag.has(k)) continue;
+    const a = Math.floor(k / EK), b = k % EK, pa = G[a].p, pb = G[b].p;
+    all.push(pa.x, pa.y, pa.z, pb.x, pb.y, pb.z);
+    if (edit.selMode !== 'vert' && edit.sel.has(a) && edit.sel.has(b)) sel.push(pa.x, pa.y, pa.z, pb.x, pb.y, pb.z);
+  }
+  for (const [line, arr] of [[edit.lineAll, all], [edit.lineSel, sel]]) { line.geometry.dispose(); line.geometry = lineGeo(arr); }
+}
+function updateEditVisibility() {
+  if (edit.points) edit.points.visible = !brush.on && !edit.op && edit.selMode === 'vert';
+  if (edit.lineSel) edit.lineSel.visible = !edit.op;
+  if (edit.lineAll) edit.lineAll.visible = !(edit.op && edit.op.kind === 'extrude');
+}
+
+// ---- selecionar aresta ou face com um clique ----
+const _pa = new THREE.Vector3();
+function scr(g) { const r = renderer.domElement.getBoundingClientRect(), v = _pa.copy(edit.groups[g].p).applyMatrix4(edit.obj.mesh.matrixWorld).project(camera); return [(v.x + 1) / 2 * r.width, (1 - v.y) / 2 * r.height]; }
+function distSeg(p, a, b) { const dx = b[0] - a[0], dy = b[1] - a[1], l = dx * dx + dy * dy || 1, t = Math.max(0, Math.min(1, ((p.x - a[0]) * dx + (p.y - a[1]) * dy) / l)); return Math.hypot(p.x - a[0] - t * dx, p.y - a[1] - t * dy); }
+// aresta de verdade (não a diagonal) mais perto do cursor, no triângulo tocado
+function pickEdge(e) {
+  const hit = brushHit(e); if (!hit) return null;
+  const T = topo(), t = hit.faceIndex, q = T.triQuad[t], p = ndc(e);
+  const cand = q >= 0 ? [0, 1, 2, 3].map(k => [T.quads[q].g[k], T.quads[q].g[(k + 1) % 4]]) : (g => [[g[0], g[1]], [g[1], g[2]], [g[2], g[0]]])(T.tg(t));
+  let best = null, bd = Infinity;
+  for (const [a, b] of cand) { const d = distSeg(p, scr(a), scr(b)); if (d < bd) { bd = d; best = [a, b]; } }
+  return { edge: best, quad: q, tri: t };
+}
+function pickElement(e) {
+  let picks = [];
+  if (edit.selMode === 'edge') { const r = pickEdge(e); if (r) picks = r.edge; }
+  else { const hit = brushHit(e); if (hit) { const T = topo(), q = T.triQuad[hit.faceIndex]; picks = q >= 0 ? T.quads[q].g.slice() : T.tg(hit.faceIndex); } }
+  const allIn = picks.length && picks.every(g => edit.sel.has(g));
+  if (!e.shiftKey) edit.sel.clear();
+  if (e.shiftKey && allIn) picks.forEach(g => edit.sel.delete(g)); else picks.forEach(g => edit.sel.add(g));
+  selectionChanged();
+}
+function setSelMode(m) {
+  edit.selMode = m;
+  document.querySelectorAll('#selModeSeg button').forEach(b => b.classList.toggle('on', b.dataset.sm === m));
+  updateEditVisibility(); rebuildEdgeLines(); paintSelection(); renderPanel();
+}
+
+// ---- operações com prévia: extrudar e cortar ----
+// Enquanto a operação está aberta, a malha mostra a prévia; mover o mouse ajusta, clique ou Enter aplica, Esc cancela.
+function opBegin(op) {
+  if (brush.on) setBrush(false, true);
+  edit.op = op; transform.detach(); updateEditVisibility(); renderOpPanel(); refreshStatus();
+}
+function opEnd() {
+  if (edit.opLines) { edit.obj.mesh.remove(edit.opLines); edit.opLines.geometry.dispose(); edit.opLines = null; }
+  edit.op = null; $('#opPanel').hidden = true; updateEditVisibility(); placePivot(); refreshStatus();
+}
+function cancelOp() {
+  const op = edit.op; if (!op) return;
+  if (op.kind === 'extrude') { const m = edit.obj.mesh; m.geometry.dispose(); m.geometry = op.oldGeo; edit.wire.geometry = op.oldGeo; buildEditData(); edit.sel = op.oldSel; }
+  opEnd(); selectionChanged();
+}
+function applyOp() {
+  const op = edit.op; if (!op) return;
+  if (op.kind === 'extrude') finishExtrude(op);
+  else if (op.kind === 'loopSlide') finishLoopCut(op);
+  else return;
+}
+
+// ===== Extrudar =====
+function startExtrude() {
+  if (state.mode !== 'edit' || edit.op) return;
+  const mesh = edit.obj.mesh, geo = mesh.geometry, T = topo(), ix = geo.index.array, nt = ix.length / 3, S = edit.sel, G = edit.groups;
+  const pos = geo.attributes.position, uv = geo.attributes.uv;
+  const region = []; for (let t = 0; t < nt; t++) if (T.tg(t).every(g => S.has(g))) region.push(t);
+  const edges = region.length ? [] : [...T.edgeTris.keys()].filter(k => !T.diag.has(k) && S.has(Math.floor(k / EK)) && S.has(k % EK));
+  if (!region.length && !edges.length) { toast('Selecione faces ou arestas para extrudar (use os modos Arestas ou Faces na barra de cima).'); return; }
+  const P = Array.from(pos.array), U = uv ? Array.from(uv.array) : new Array(pos.count * 2).fill(0), I = Array.from(ix);
+  const vert = (x, y, z, u = 0, v = 0) => { P.push(x, y, z); U.push(u, v); return P.length / 3 - 1; };
+  const copy = i => vert(P[i * 3], P[i * 3 + 1], P[i * 3 + 2], U[i * 2], U[i * 2 + 1]);
+  const gp = g => G[g].p, movers = [], walls = [];
+  const triNormal = t => { const g = T.tg(t), a = gp(g[0]); return new THREE.Vector3().subVectors(gp(g[1]), a).cross(new THREE.Vector3().subVectors(gp(g[2]), a)); };
+  const dir = new THREE.Vector3();
+  // parede entre a aresta de baixo (i->j, na ordem do triângulo) e a de cima (ti, tj)
+  const wall = (i, j, ti, tj, faceN, outward) => {
+    const bA = copy(i), bB = copy(j);
+    U[bA * 2] = 0; U[bA * 2 + 1] = 0; U[bB * 2] = 1; U[bB * 2 + 1] = 0;
+    const at = I.length; I.push(bA, bB, tj, bA, tj, ti);
+    walls.push({ at, faceN, outward });
+  };
+  if (region.length) {
+    const inRegion = new Set(region), dup = new Map(), count = new Map();
+    for (const t of region) { dir.add(triNormal(t)); const g = T.tg(t); for (let k = 0; k < 3; k++) { const key = ekey(g[k], g[(k + 1) % 3]); count.set(key, (count.get(key) || 0) + 1); } }
+    for (const t of region) for (let k = 0; k < 3; k++) { const i = I[t * 3 + k]; if (!dup.has(i)) { const n = copy(i); dup.set(i, n); movers.push(n); } }
+    for (const t of region) {
+      const g = T.tg(t), orig = [ix[t * 3], ix[t * 3 + 1], ix[t * 3 + 2]], c = new THREE.Vector3().add(gp(g[0])).add(gp(g[1])).add(gp(g[2])).divideScalar(3), fn = triNormal(t).normalize();
+      for (let k = 0; k < 3; k++) {
+        if (count.get(ekey(g[k], g[(k + 1) % 3])) !== 1) continue;
+        const i = orig[k], j = orig[(k + 1) % 3], ti = copy(dup.get(i)), tj = copy(dup.get(j));
+        U[ti * 2] = 0; U[ti * 2 + 1] = 1; U[tj * 2] = 1; U[tj * 2 + 1] = 1; movers.push(ti, tj);
+        const mid = new THREE.Vector3().addVectors(gp(g[k]), gp(g[(k + 1) % 3])).multiplyScalar(0.5);
+        wall(i, j, ti, tj, fn, mid.sub(c).normalize());
+      }
+      for (let k = 0; k < 3; k++) I[t * 3 + k] = dup.get(orig[k]);
+    }
+  } else {
+    const top = new Map(), topOf = (g, i) => { if (!top.has(g)) { const n = copy(i); top.set(g, n); movers.push(n); } return top.get(g); };
+    for (const key of edges) {
+      const t = T.edgeTris.get(key)[0], g = T.tg(t), orig = [ix[t * 3], ix[t * 3 + 1], ix[t * 3 + 2]];
+      let k = 0; while (ekey(g[k], g[(k + 1) % 3]) !== key) k++;
+      const fn = triNormal(t).normalize(); dir.add(fn);
+      const c = new THREE.Vector3().add(gp(g[0])).add(gp(g[1])).add(gp(g[2])).divideScalar(3), mid = new THREE.Vector3().addVectors(gp(g[k]), gp(g[(k + 1) % 3])).multiplyScalar(0.5);
+      const i = orig[k], j = orig[(k + 1) % 3];
+      wall(i, j, topOf(g[k], i), topOf(g[(k + 1) % 3], j), fn, mid.sub(c).normalize());
+    }
+  }
+  if (dir.lengthSq() < 1e-12) dir.set(0, 1, 0);
+  dir.normalize();
+  const oldGeo = geo, oldSel = new Set(S);
+  const preview = buildGeometry({ prim: 'custom' }, { position: P, uv: U, index: I });
+  mesh.geometry = preview; edit.wire.geometry = preview;
+  const base = new Float32Array(movers.length * 3);
+  movers.forEach((m, k) => { base[k * 3] = P[m * 3]; base[k * 3 + 1] = P[m * 3 + 1]; base[k * 3 + 2] = P[m * 3 + 2]; });
+  opBegin({ kind: 'extrude', mode: region.length ? 'faces' : 'arestas', oldGeo, oldSel, movers, base, normal: dir, dirMode: 'normal', d: 0, walls, count: region.length || edges.length });
+  edit.lineAll.visible = false;
+  preview.computeBoundingSphere();
+  setExtrude(Math.max(0.05, Math.min(0.5, preview.boundingSphere.radius * 0.25)) * meshScale(mesh));
+}
+function extrudeDir(op) {
+  if (op.dirMode === 'normal') return op.normal.clone();
+  const inv = edit.obj.mesh.matrixWorld.clone().invert();
+  return new THREE.Vector3(...{ x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }[op.dirMode]).transformDirection(inv);
+}
+function setExtrude(d) {
+  const op = edit.op; if (!op || op.kind !== 'extrude') return;
+  op.d = d;
+  const mesh = edit.obj.mesh, pos = mesh.geometry.attributes.position, v = extrudeDir(op).multiplyScalar(d / meshScale(mesh));
+  op.movers.forEach((m, k) => pos.setXYZ(m, op.base[k * 3] + v.x, op.base[k * 3 + 1] + v.y, op.base[k * 3 + 2] + v.z));
+  pos.needsUpdate = true; mesh.geometry.computeVertexNormals(); mesh.geometry.computeBoundingSphere(); mesh.geometry.computeBoundingBox();
+  const out = $('#opD'); if (out) { out.value = d.toFixed(3); }
+  const sl = $('#opDs'); if (sl && document.activeElement !== sl) sl.value = d;
+}
+function finishExtrude(op) {
+  const mesh = edit.obj.mesh, geo = mesh.geometry, pos = geo.attributes.position, I = Array.from(geo.index.array);
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), sign = op.d < 0 ? -1 : 1;
+  // vira as paredes que ficaram para dentro: para o lado de fora (faces) ou acompanhando a face (arestas)
+  for (const w of op.walls) {
+    a.fromBufferAttribute(pos, I[w.at]); b.fromBufferAttribute(pos, I[w.at + 1]); c.fromBufferAttribute(pos, I[w.at + 2]);
+    const n = b.sub(a).cross(c.sub(a)), target = op.mode === 'faces' ? w.outward.clone().multiplyScalar(sign) : w.outward.clone().addScaledVector(w.faceN, 0.5);
+    if (n.dot(target) < 0) { for (const s of [w.at, w.at + 3]) { const t = I[s + 1]; I[s + 1] = I[s + 2]; I[s + 2] = t; } }
+  }
+  const P = Array.from(pos.array), U = geo.attributes.uv ? Array.from(geo.attributes.uv.array) : null;
+  const ng = buildGeometry({ prim: 'custom' }, { position: P, uv: U, index: I });
+  geo.dispose(); op.oldGeo.dispose(); mesh.geometry = ng; edit.wire.geometry = ng;
+  markModified(); buildEditData();
+  // a parte nova fica selecionada, pronta para puxar com o gizmo
+  edit.sel = new Set(op.movers.map(m => edit.v2g[m]));
+  opEnd(); selectionChanged(); commit();
+  toast(`Extrudado (${op.count} ${op.mode === 'faces' ? 'triângulo(s)' : 'aresta(s)'}). A parte nova está selecionada: use o gizmo para puxar mais.`);
+}
+
+// ===== Cortar em loop =====
+function quadsOnEdge(a, b) { const T = topo(), k = ekey(a, b), l = T.edgeTris.get(k) || []; return [...new Set(l.map(t => T.triQuad[t]))].filter(q => q >= 0 && T.quads[q].diag !== k); }
+function oppositeEdge(q, A, B) {
+  const g = topo().quads[q].g, ia = g.indexOf(A), ib = g.indexOf(B);
+  return [g[(ia + 1) % 4] === B ? g[(ia + 3) % 4] : g[(ia + 1) % 4], g[(ib + 1) % 4] === A ? g[(ib + 3) % 4] : g[(ib + 1) % 4]];
+}
+// anel de quadrados atravessados a partir de uma aresta, com o lado "A" sempre do mesmo lado
+function edgeRing(a, b) {
+  const qs = quadsOnEdge(a, b); if (!qs.length) return null;
+  const seen = new Set(), steps = [];
+  const walk = (q, A, B, into) => {
+    while (q >= 0 && !seen.has(q)) {
+      seen.add(q); const [A2, B2] = oppositeEdge(q, A, B); into.push({ q, A, B, A2, B2 });
+      const next = quadsOnEdge(A2, B2).filter(x => x !== q); A = A2; B = B2; q = next.length ? next[0] : -1;
+    }
+  };
+  walk(qs[0], a, b, steps);
+  if (qs[1] !== undefined && !seen.has(qs[1])) { const back = []; walk(qs[1], a, b, back); steps.unshift(...back.reverse()); }
+  return steps;
+}
+const cutTs = op => op.cuts === 1 ? [op.t] : [0.5 - op.spread, 0.5 + op.spread];
+function drawLoopPreview(op) {
+  const G = edit.groups, pts = [], ts = cutTs(op), L = (A, B, t) => new THREE.Vector3().lerpVectors(G[A].p, G[B].p, t);
+  for (const s of op.ring) for (const t of ts) { const x = L(s.A, s.B, t), y = L(s.A2, s.B2, t); pts.push(x.x, x.y, x.z, y.x, y.y, y.z); }
+  if (!edit.opLines) { edit.opLines = noRay(new THREE.LineSegments(lineGeo(pts), new THREE.LineBasicMaterial({ color: 0xffd23f, depthTest: false, toneMapped: false }))); edit.opLines.renderOrder = 30; edit.obj.mesh.add(edit.opLines); }
+  else { edit.opLines.geometry.dispose(); edit.opLines.geometry = lineGeo(pts); }
+}
+function startLoopCut(cuts) {
+  if (state.mode !== 'edit') return;
+  // base = escolha feita no botão/atalho; no "C" simples, segurar Shift enquanto passa o mouse mostra 2 cortes
+  if (edit.op && edit.op.kind.startsWith('loop')) { edit.op.cuts = edit.op.base = cuts; if (edit.op.ring) drawLoopPreview(edit.op); renderOpPanel(); return; }
+  if (edit.op) return;
+  opBegin({ kind: 'loopPick', cuts, base: cuts, t: 0.5, spread: 0.2, ring: null });
+}
+function loopHover(e) {
+  const op = edit.op, r = pickEdge(e), ring = r && edgeRing(...r.edge);
+  op.ring = ring && ring.length ? ring : null;
+  if (op.ring) drawLoopPreview(op); else if (edit.opLines) edit.opLines.visible = false;
+  if (edit.opLines) edit.opLines.visible = !!op.ring;
+}
+function finishLoopCut(op) {
+  const mesh = edit.obj.mesh, geo = mesh.geometry, T = topo(), G = edit.groups, pos = geo.attributes.position, uv = geo.attributes.uv;
+  const P = Array.from(pos.array), U = uv ? Array.from(uv.array) : new Array(pos.count * 2).fill(0), out = [], drop = new Set(), ts = cutTs(op);
+  const vert = (p, u, v) => { P.push(p.x, p.y, p.z); U.push(u, v); return P.length / 3 - 1; };
+  const newVerts = [];
+  for (const s of op.ring) {
+    const q = T.quads[s.q], vi = g => q.vi[q.g.indexOf(g)];
+    q.tris.forEach(t => drop.add(t));
+    const vA = vi(s.A), vB = vi(s.B), vA2 = vi(s.A2), vB2 = vi(s.B2);
+    const at = (A, B, iA, iB, t) => { const n = vert(new THREE.Vector3().lerpVectors(G[A].p, G[B].p, t), U[iA * 2] + (U[iB * 2] - U[iA * 2]) * t, U[iA * 2 + 1] + (U[iB * 2 + 1] - U[iA * 2 + 1]) * t); newVerts.push(n); return n; };
+    const X = [vA, ...ts.map(t => at(s.A, s.B, vA, vB, t)), vB], Y = [vA2, ...ts.map(t => at(s.A2, s.B2, vA2, vB2, t)), vB2];
+    const ccw = q.g[(q.g.indexOf(s.A) + 1) % 4] === s.B;
+    for (let k = 0; k < X.length - 1; k++) {
+      const quad = ccw ? [X[k], X[k + 1], Y[k + 1], Y[k]] : [X[k], Y[k], Y[k + 1], X[k + 1]];
+      out.push(quad[0], quad[1], quad[2], quad[0], quad[2], quad[3]);
+    }
+  }
+  const ix = geo.index.array, I = [];
+  for (let t = 0; t < ix.length / 3; t++) if (!drop.has(t)) I.push(ix[t * 3], ix[t * 3 + 1], ix[t * 3 + 2]);
+  I.push(...out);
+  const ng = buildGeometry({ prim: 'custom' }, { position: P, uv: U, index: I });
+  geo.dispose(); mesh.geometry = ng; edit.wire.geometry = ng;
+  markModified(); buildEditData();
+  // as arestas novas do corte ficam selecionadas
+  edit.sel = new Set(newVerts.map(n => edit.v2g[n]));
+  opEnd(); selectionChanged(); commit();
+  toast(`Corte aplicado em ${op.ring.length} face(s)${op.cuts === 2 ? ', com 2 cortes' : ''}. As arestas novas estão selecionadas.`);
+}
+
+// ---- painel da operação ----
+function renderOpPanel() {
+  const op = edit.op, box = $('#opPanel'); if (!op) { box.hidden = true; return; }
+  box.hidden = false; box.replaceChildren();
+  const btns = (...b) => el('div', { class: 'btns' }, ...b);
+  const apply = el('button', { class: 'btn pri', disabled: op.kind === 'loopPick', onclick: applyOp }, 'Aplicar (Enter)');
+  const cancel = el('button', { class: 'btn', onclick: cancelOp }, 'Cancelar (Esc)');
+  if (op.kind === 'extrude') {
+    box.append(el('b', {}, `Extrudar ${op.mode}`),
+      el('span', { class: 'note' }, COARSE ? 'Ajuste a distância e aplique.' : 'Mova o mouse para definir a distância. Clique para aplicar.'),
+      el('label', {}, 'Distância ', el('input', { type: 'range', id: 'opDs', min: -2, max: 2, step: 0.005, value: op.d, oninput: e => setExtrude(+e.target.value) }),
+        el('input', { class: 'num', id: 'opD', type: 'number', step: 0.01, value: op.d.toFixed(3), style: 'width:76px', oninput: e => { const v = parseFloat(e.target.value); if (!isNaN(v)) setExtrude(v); } })),
+      el('div', { class: 'seg' }, [['normal', 'Normal'], ['x', 'X'], ['y', 'Y'], ['z', 'Z']].map(([k, t]) =>
+        el('button', { class: op.dirMode === k ? 'on' : '', onclick: () => { op.dirMode = k; setExtrude(op.d); renderOpPanel(); } }, t))),
+      btns(apply, cancel));
+  } else {
+    const slide = op.kind === 'loopSlide';
+    box.append(el('b', {}, op.cuts === 2 ? 'Cortar em 2' : 'Cortar'),
+      el('span', { class: 'note' }, !slide ? 'Passe o mouse numa aresta: o amarelo mostra onde o corte vai passar. Clique para escolher.' : (op.cuts === 2 ? 'Mova o mouse para afastar ou aproximar os 2 cortes.' : 'Mova o mouse para deslizar o corte.') + ' Clique para aplicar.'),
+      el('div', { class: 'seg' }, [[1, '1 corte'], [2, '2 cortes (Shift)']].map(([n, t]) => el('button', { class: op.cuts === n ? 'on' : '', onclick: () => startLoopCut(n) }, t))),
+      slide && (op.cuts === 1
+        ? el('label', {}, 'Posição ', el('input', { type: 'range', id: 'opT', min: 0.02, max: 0.98, step: 0.01, value: op.t, oninput: e => { op.t = +e.target.value; drawLoopPreview(op); } }))
+        : el('label', {}, 'Afastamento ', el('input', { type: 'range', id: 'opS', min: 0.02, max: 0.48, step: 0.01, value: op.spread, oninput: e => { op.spread = +e.target.value; drawLoopPreview(op); } }))),
+      btns(apply, cancel));
+  }
+}
+
+// ---- mouse durante a operação (fase de captura: a câmera e a seleção não ficam sabendo) ----
+viewport.addEventListener('pointermove', e => {
+  const op = edit.op; if (!op || state.mode !== 'edit') return;
+  if (op.kind === 'loopPick') { const want = e.shiftKey ? 2 : op.base; if (want !== op.cuts) { op.cuts = want; renderOpPanel(); } loopHover(e); return; }
+  if (!op.last) { op.last = { x: e.clientX, y: e.clientY }; return; }
+  const dx = e.clientX - op.last.x, dy = e.clientY - op.last.y; op.last = { x: e.clientX, y: e.clientY };
+  if (op.kind === 'extrude') {
+    // quanto o mouse andou na direção em que a extrusão aparece na tela
+    const mesh = edit.obj.mesh, c = new THREE.Vector3(); op.movers.slice(0, 50).forEach((m, k) => c.add(_pa.set(op.base[k * 3], op.base[k * 3 + 1], op.base[k * 3 + 2])));
+    c.divideScalar(Math.min(50, op.movers.length)).applyMatrix4(mesh.matrixWorld);
+    const dirW = extrudeDir(op).transformDirection(mesh.matrixWorld), r = renderer.domElement.getBoundingClientRect();
+    const a = c.clone().project(camera), b = c.clone().add(dirW).project(camera);
+    const sx = (b.x - a.x) / 2 * r.width, sy = -(b.y - a.y) / 2 * r.height, l2 = sx * sx + sy * sy;
+    if (l2 > 1) setExtrude(op.d + (dx * sx + dy * sy) / l2);
+  } else if (op.kind === 'loopSlide') {
+    if (op.cuts === 1) op.t = Math.max(0.02, Math.min(0.98, op.t + dx / 300));
+    else op.spread = Math.max(0.02, Math.min(0.48, op.spread + dx / 500));
+    drawLoopPreview(op);
+    const s = $(op.cuts === 1 ? '#opT' : '#opS'); if (s) s.value = op.cuts === 1 ? op.t : op.spread;
+  }
+}, true);
+viewport.addEventListener('pointerdown', e => {
+  const op = edit.op; if (!op || state.mode !== 'edit') return;
+  if (e.target.closest && e.target.closest('#opPanel')) return;
+  e.stopPropagation();
+  if (e.button === 2) { cancelOp(); return; }
+  if (e.button !== 0) return;
+  if (op.kind === 'loopPick') { if (op.ring) { op.kind = 'loopSlide'; op.last = { x: e.clientX, y: e.clientY }; renderOpPanel(); } return; }
+  if (COARSE && op.kind === 'extrude') return;   // no toque, aplica pelo botão (o dedo não "passa" por cima)
+  applyOp();
+}, true);
 
 /* ================= Unir vértices e juntar objetos ================= */
 // Solda (o "Merge by Distance" do Blender): vértices a até `dist` uns dos outros vão para a posição média do grupo e
@@ -1173,7 +1510,8 @@ function placeCursor(hit) {
 function setBrush(on, silent) {
   if (on && state.mode !== 'edit') { if (!state.selected) { toast('Selecione um objeto para esculpir.'); return; } enterEdit(); }
   brush.on = on; brush.stroke = null; brushCursor.visible = false;
-  if (edit.points) edit.points.visible = !on;
+  if (on && edit.op) cancelOp();
+  updateEditVisibility();
   $('#btnBrush').classList.toggle('on', on); $('#brushBar').hidden = !on;
   if (state.mode === 'edit') { placePivot(); paintSelection(); }
   if (!silent) { renderPanel(); refreshStatus(); if (on) toast(COARSE ? 'Um dedo na peça esculpe; fora dela gira a câmera; dois dedos aproximam.' : 'Arraste sobre a peça para esculpir; fora dela gira a câmera. Ctrl inverte, [ e ] mudam o tamanho.'); }
@@ -1396,6 +1734,7 @@ renderer.domElement.addEventListener('pointerup', e => {
   }
   if (d.btn !== 0 || moved > (e.pointerType === 'touch' ? 10 : 4) || d.onGizmo || dragging || brush.on) return;
   ray.setFromCamera(new THREE.Vector2(p.x / p.w * 2 - 1, -(p.y / p.h) * 2 + 1), camera);
+  if (state.mode === 'edit' && edit.selMode !== 'vert') { pickElement(e); return; }
   if (state.mode === 'edit') {
     let best = -1, bestD = e.pointerType === 'touch' ? 26 : 11;
     for (let g = 0; g < edit.groups.length; g++) {
@@ -1842,6 +2181,15 @@ function renderEditTab(box) {
       el('button', { class: 'btn', onclick: () => { edit.sel.clear(); selectionChanged(); } }, 'Limpar')),
     check('f-xray', 'Raio-X: ver e pegar vértices de trás', edit.xray, v => { edit.xray = v; pointsMat.depthTest = !v; pointsMat.needsUpdate = true; })));
   box.append(el('div', { class: 'grp' },
+    el('h4', {}, 'Criar e cortar'),
+    el('div', { class: 'seg', style: 'align-self:flex-start' }, [['vert', 'Vértices'], ['edge', 'Arestas'], ['face', 'Faces']].map(([m, t]) =>
+      el('button', { class: edit.selMode === m ? 'on' : '', onclick: () => setSelMode(m) }, t))),
+    el('p', { class: 'note' }, 'Extrudar puxa as faces ou arestas selecionadas criando polígonos novos. Cortar passa um corte em volta da peça, pelos quadrados, a partir da aresta que você escolher.'),
+    el('div', { class: 'btns' },
+      el('button', { class: 'btn', onclick: startExtrude }, 'Extrudar (E)'),
+      el('button', { class: 'btn', onclick: () => startLoopCut(1) }, 'Cortar (C)'),
+      el('button', { class: 'btn', onclick: () => startLoopCut(2) }, 'Cortar em 2 (Shift+C)'))));
+  box.append(el('div', { class: 'grp' },
     el('h4', {}, 'Pincel'),
     el('p', { class: 'note' }, brush.on ? 'Pincel ligado: os ajustes ficam na barra embaixo do viewport. A área azul mostra o que vai se mexer.' : 'Esculpa passando o pincel na peça, com força maior no centro e menor na borda.'),
     el('div', { class: 'btns' }, el('button', { class: 'btn' + (brush.on ? ' on' : ' pri'), onclick: () => setBrush(!brush.on) }, brush.on ? 'Desligar pincel (P)' : 'Ligar pincel (P)'))));
@@ -2004,6 +2352,7 @@ function refreshStatus() {
 function updateModeUI() {
   const ed = state.mode === 'edit';
   $('#mObject').classList.toggle('on', !ed); $('#mEdit').classList.toggle('on', ed);
+  $('#selModeSeg').hidden = !ed;
   const b = $('#modeBadge'); b.textContent = ed ? 'Edição de vértices' : 'Objeto'; b.classList.toggle('edit', ed);
 }
 function setTool(t) {
@@ -2034,6 +2383,9 @@ $('#pNewBlank').onclick = () => newProject(false); $('#pNewExample').onclick = (
 $('#pImport').onclick = () => $('#fileJson').click();
 $('#btnPanel').onclick = () => $('#panel').classList.toggle('open');
 $('#btnBrush').onclick = () => setBrush(!brush.on);
+document.querySelectorAll('#selModeSeg [data-sm]').forEach(b => b.onclick = () => setSelMode(b.dataset.sm));
+$('#btnExtrude').onclick = () => startExtrude();
+$('#btnCut').onclick = e => startLoopCut(e.shiftKey ? 2 : 1);
 document.querySelectorAll('#brushModes button').forEach(b => b.onclick = () => { brush.mode = b.dataset.bm; syncBrushBar(); refreshStatus(); });
 $('#bSize').oninput = e => { brush.radius = +e.target.value; syncBrushBar(); if (brushCursor.visible) brushCursor.scale.setScalar(brush.radius); };
 $('#bStr').oninput = e => { brush.strength = +e.target.value; syncBrushBar(); };
@@ -2045,6 +2397,15 @@ $('#bDet').oninput = e => { brush.detail = +e.target.value; syncBrushBar(); };
 syncBrushBar();
 
 /* ---- celular: libera o acesso pela rede e mostra o endereço + QR code ---- */
+// endereço para o celular no título da janela (é o que aparece na barra do Windows): "Forja 3D · 192.168.1.5:4631"
+async function updateTitle() {
+  if (!DB.server || !DB.server.local) return;
+  try {
+    const info = await DB.api('info'), url = info.rede && info.urls[0];
+    document.title = url ? `Forja 3D · ${url.replace(/^https?:\/\//, '').replace(/\/$/, '')}` : 'Forja 3D';
+    return !!url;
+  } catch (e) { return false; }
+}
 let qrLib = null;
 function loadQr() {
   return qrLib || (qrLib = new Promise((res, rej) => { const sc = el('script', { src: 'vendor/qrcode.min.js' }); sc.onload = () => res(window.qrcode); sc.onerror = rej; document.head.append(sc); }));
@@ -2056,7 +2417,7 @@ async function showPhone() {
   try { info = await DB.api('info'); } catch (e) { body.replaceChildren(el('p', { class: 'note', style: 'padding:16px' }, 'O servidor da Forja não respondeu. Feche e abra o app de novo.')); return; }
   const toggle = async on => {
     try { await DB.api('rede?ligar=' + (on ? 1 : 0), { method: 'POST' }); } catch (e) { toast(e.message); }
-    showPhone();
+    showPhone(); updateTitle();
   };
   if (!info.rede) {
     body.replaceChildren(el('div', { class: 'qr', style: 'flex-direction:column;align-items:stretch' },
@@ -2121,7 +2482,12 @@ addMenu.append(...Object.entries(PRIMS).map(([k, p]) => el('button', { onclick: 
   ...Object.entries(LIGHTS).map(([k, l]) => el('button', { onclick: () => { addMenu.hidden = true; addLight(k); } }, 'Luz: ' + l.label, el('small', {}, l.short))));
 function toggleMenu(menu, anchor) {
   const open = menu.hidden; document.querySelectorAll('.dd').forEach(d => d.hidden = true); menu.hidden = !open;
-  if (open && menu === addMenu) { const r = anchor.getBoundingClientRect(), a = $('#app').getBoundingClientRect(); addMenu.style.top = (r.top - a.top) + 'px'; addMenu.style.left = (r.right - a.left + 6) + 'px'; }
+  if (open && menu === addMenu) {
+    const r = anchor.getBoundingClientRect(), a = $('#app').getBoundingClientRect();
+    addMenu.style.left = (r.right - a.left + 6) + 'px';
+    // ao lado do botão, mas subindo o que for preciso para o menu inteiro caber na janela
+    addMenu.style.top = Math.max(8, Math.min(r.top - a.top, a.height - addMenu.offsetHeight - 8)) + 'px';
+  }
 }
 $('#btnAdd').onclick = e => { e.stopPropagation(); toggleMenu(addMenu, e.currentTarget); };
 $('#btnImport').onclick = e => { e.stopPropagation(); toggleMenu($('#ddImport')); };
@@ -2134,6 +2500,13 @@ window.addEventListener('keydown', e => {
   const tg = e.target.tagName;
   if (tg === 'INPUT' || tg === 'SELECT' || tg === 'TEXTAREA') return;
   const k = e.key.toLowerCase(), ctrl = e.ctrlKey || e.metaKey;
+  // operação com prévia aberta: Enter aplica, Esc (ou Ctrl+Z) cancela, Shift alterna 1/2 cortes; o resto fica parado
+  if (edit.op) {
+    if (k === 'enter') { e.preventDefault(); applyOp(); }
+    else if (k === 'escape' || (ctrl && k === 'z')) { e.preventDefault(); cancelOp(); }
+    else if (k === 'shift' && edit.op.kind === 'loopSlide') startLoopCut(edit.op.cuts === 2 ? 1 : 2);
+    return;
+  }
   if (ctrl && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (ctrl && k === 'y') { e.preventDefault(); redo(); return; }
   if (ctrl && k === 's') { e.preventDefault(); saveNow(); return; }
@@ -2157,6 +2530,8 @@ window.addEventListener('keydown', e => {
     case 'a': selectAll(); break;
     case 'b': toggleBox(); break;
     case 'p': setBrush(!brush.on); break;
+    case 'e': startExtrude(); break;
+    case 'c': startLoopCut(e.shiftKey ? 2 : 1); break;
     case '[': if (brush.on) { brush.radius = Math.max(0.03, +(brush.radius / 1.15).toFixed(3)); syncBrushBar(); } break;
     case ']': if (brush.on) { brush.radius = Math.min(2.5, +(brush.radius * 1.15).toFixed(3)); syncBrushBar(); } break;
     case 'o': if (state.mode === 'edit') { edit.prop = !edit.prop; selectionChanged(); toast(edit.prop ? 'Edição proporcional ligada' : 'Edição proporcional desligada'); } break;
@@ -2193,6 +2568,8 @@ renderer.setAnimationLoop(() => {
   else await openProject(p);
   // botão Celular só no computador que roda o servidor (no próprio celular não faz sentido)
   $('#btnPhone').hidden = !(DB.server && DB.server.local);
+  // a rede liga logo depois que o servidor sobe: se ainda não respondeu com o IP, pergunta de novo em seguida
+  updateTitle().then(ok => { if (!ok) setTimeout(updateTitle, 2000); });
   // o servidor confere o GitHub assim que sobe: pergunta agora e de novo daqui a pouco, quando a resposta já chegou
   checkUpdate(); setTimeout(checkUpdate, 15000);
   $('#loading').remove();

@@ -1,6 +1,6 @@
-// Servidor da Forja 3D:  node serve.js [porta] [--auto-fechar] [--rede]
-//   http://127.0.0.1:4630       só neste computador
-//   http://<ip-do-pc>:4631       pelo celular/tablet na mesma rede (liga com --rede ou pelo botão "Celular" do app)
+// Servidor da Forja 3D:  node serve.js [porta] [--auto-fechar] [--sem-rede]
+//   http://127.0.0.1:4630       neste computador
+//   http://<ip-do-pc>:4631       pelo celular/tablet na mesma rede (já sobe ligado; --sem-rede ou o botão "Celular" desligam)
 // Os projetos ficam salvos em arquivos neste computador (API /api/projetos), então o PC e o celular veem os mesmos.
 // --auto-fechar: cada tela aberta manda um "estou viva" a cada 4 s; sem nenhum sinal por 90 s, o servidor sai sozinho.
 const http = require('http');
@@ -31,13 +31,16 @@ let last = Date.now();
 let lanServers = [];
 
 // Só endereços de rede privada (10.x, 172.16-31.x, 192.168.x): o acesso pela rede nunca fica aberto num IP público
-// (VPN, nuvem). Wi-Fi e cabo primeiro; hotspot do Windows (192.168.137.x) e adaptadores virtuais por último.
+// (VPN, nuvem). Fica de fora adaptador com máscara /32 (túnel de VPN: nenhum aparelho da rede alcança).
+// Wi-Fi primeiro, depois cabo; rede de casa (192.168.x) antes de 10.x; hotspot do Windows (192.168.137.x) e
+// adaptadores virtuais por último.
 const isPrivate = ip => /^10\./.test(ip) || /^192\.168\./.test(ip) || /^172\.(1[6-9]|2\d|3[01])\./.test(ip);
 function lanAddrs() {
   const out = [];
   for (const [name, list] of Object.entries(os.networkInterfaces())) for (const n of list || [])
-    if (n.family === 'IPv4' && !n.internal && isPrivate(n.address)) {
-      const score = (/wi-?fi|wlan|wireless|ethernet|^eth|^en/i.test(name) ? 0 : 2) + (/virtual|vmware|vbox|hyper-v|vethernet|wsl|docker/i.test(name) || n.address.startsWith('192.168.137.') ? 4 : 0);
+    if (n.family === 'IPv4' && !n.internal && isPrivate(n.address) && n.netmask !== '255.255.255.255') {
+      const score = (/wi-?fi|wlan|wireless/i.test(name) ? 0 : /ethernet|^eth|^en/i.test(name) ? 1 : 2) + (n.address.startsWith('192.168.') ? 0 : 0.5)
+        + (/virtual|vmware|vbox|hyper-v|vethernet|wsl|docker/i.test(name) || n.address.startsWith('192.168.137.') ? 4 : 0);
       out.push({ address: n.address, score });
     }
   return out.sort((a, b) => a.score - b.score).map(a => a.address);
@@ -145,6 +148,7 @@ server.on('error', e => {
 });
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`Forja 3D ${VERSION} em http://127.0.0.1:${PORT}  ·  projetos em ${DATA}`);
-  if (process.argv.includes('--rede')) setRede(true);
+  // acesso pelo celular ligado por padrão (só em IPs de rede privada)
+  if (!process.argv.includes('--sem-rede')) setRede(true);
 });
 if (AUTO) setInterval(() => { if (Date.now() - last > 90000) process.exit(0); }, 5000);
