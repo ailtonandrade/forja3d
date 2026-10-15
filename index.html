@@ -37,6 +37,9 @@ button{cursor:pointer}
 .tb:hover{background:var(--raised)}
 .tb:disabled{opacity:.35;cursor:default;background:transparent}
 .tb.icon{padding:5px 7px;display:inline-flex}
+.tb.upd{background:var(--accent);color:var(--accent-ink);font-weight:500}
+.tb.upd:hover{background:var(--accent);filter:brightness(1.08)}
+.tb.upd:disabled{opacity:.8;cursor:progress;background:var(--accent)}
 #projName{background:transparent;border:1px solid transparent;border-radius:6px;padding:5px 8px;min-width:70px;width:200px;flex:0 1 200px;font-weight:500}
 #projName:hover{border-color:var(--line)}
 #projName:focus{border-color:var(--sel);background:var(--ground);outline:none}
@@ -213,6 +216,7 @@ input[type=color]{width:100%;height:26px;border:1px solid var(--line);border-rad
         <button data-act="savePng">Imagem do viewport <small>.png</small></button>
       </div>
     </div>
+    <button class="tb upd" id="btnUpdate" hidden></button>
     <button class="tb" id="btnPhone" hidden title="Abrir esta Forja no celular ou tablet">Celular</button>
     <button class="tb mobile-only" id="btnPanel">Painel</button>
   </header>
@@ -228,6 +232,7 @@ input[type=color]{width:100%;height:26px;border:1px solid var(--line);border-rad
     <div class="sep"></div>
     <button class="tool" id="btnAdd" title="Adicionar objeto (Shift+A)"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
     <button class="tool" id="btnDup" title="Duplicar (Shift+D)"><svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></svg></button>
+    <button class="tool" id="btnHome" title="Câmera padrão: volta a vista inicial enquadrando a cena toda (H)"><svg viewBox="0 0 24 24"><path d="M3.5 11L12 4l8.5 7"/><path d="M6 9.5V20h12V9.5"/><path d="M10 20v-5h4v5"/></svg><kbd>H</kbd></button>
     <button class="tool" id="btnFocus" title="Enquadrar seleção (F)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/></svg></button>
     <button class="tool" id="btnDel" title="Excluir (X ou Delete)"><svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg></button>
   </aside>
@@ -354,6 +359,32 @@ camera.position.set(6, 4.5, 7.5);
 const orbit = new OrbitControls(camera, renderer.domElement);
 orbit.enableDamping = true; orbit.dampingFactor = 0.12;
 orbit.target.set(0, 0.5, 0);
+// limites do zoom: sem eles a roda (ou a pinça) leva a câmera para longe demais ou para dentro do alvo
+orbit.minDistance = 0.15; orbit.maxDistance = 150;
+
+// Zoom próprio (roda do mouse, rolagem de dois dedos e pinça do trackpad). O do OrbitControls dá o mesmo salto
+// em cada evento, e o trackpad manda dezenas de eventos pequenos por gesto: a câmera pulava para dentro ou para
+// longe. Aqui o passo é proporcional ao tamanho do movimento e o zoom vai na direção do ponto sob o cursor.
+// (A pinça no celular continua com o OrbitControls, que trata toque à parte.)
+const _zoomP = new THREE.Vector3(), _zoomPlane = new THREE.Plane(), _zoomRay = new THREE.Raycaster(), _zoomDir = new THREE.Vector3();
+viewport.addEventListener('wheel', e => {
+  e.preventDefault(); e.stopPropagation();   // nem o zoom da página (Ctrl+roda) nem o do OrbitControls
+  const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1);
+  // a pinça do trackpad chega como roda com Ctrl e passos bem pequenos: precisa de mais sensibilidade
+  const f = THREE.MathUtils.clamp(Math.exp(dy * (e.ctrlKey ? 0.01 : 0.0012)), 0.8, 1.25);
+  const dist = camera.position.distanceTo(orbit.target);
+  const k = THREE.MathUtils.clamp(dist * f, orbit.minDistance, orbit.maxDistance) / dist;
+  if (Math.abs(k - 1) < 1e-4) return;
+  // ponto sob o cursor no plano do alvo (de frente para a câmera): ele fica parado na tela durante o zoom
+  const r = renderer.domElement.getBoundingClientRect();
+  _zoomRay.setFromCamera(new THREE.Vector2((e.clientX - r.left) / r.width * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  _zoomPlane.setFromNormalAndCoplanarPoint(camera.getWorldDirection(_zoomDir), orbit.target);
+  if (!_zoomRay.ray.intersectPlane(_zoomPlane, _zoomP)) _zoomP.copy(orbit.target);
+  orbit.target.sub(_zoomP).multiplyScalar(k).add(_zoomP);
+  camera.position.sub(_zoomP).multiplyScalar(k).add(_zoomP);
+  orbit.update();
+  scheduleSave();
+}, { capture: true, passive: false });
 
 const grid = new THREE.GridHelper(40, 40, 0x56606e, 0x2c323b);
 grid.material.transparent = true; grid.material.opacity = 0.7;
@@ -1019,6 +1050,21 @@ function setView(v) {
   const dir = { front: [0, 0, 1], right: [1, 0, 0], top: [0, 1, 0.0001], persp: [1, 0.72, 1.15] }[v];
   camera.position.copy(orbit.target).addScaledVector(new THREE.Vector3(...dir).normalize(), dist); orbit.update();
 }
+// Câmera padrão: volta para a vista 3/4 enquadrando tudo que está visível (ou a posição inicial, com a cena vazia)
+function resetView() {
+  // planos (chão) ficam de fora do enquadramento, senão um piso grande deixa as peças minúsculas
+  const box = new THREE.Box3(), vis = state.objects.filter(o => o.mesh.visible), pieces = vis.filter(o => o.prim !== 'plane');
+  (pieces.length ? pieces : vis).forEach(o => box.expandByObject(o.mesh));
+  const dir = new THREE.Vector3(1, 0.72, 1.15).normalize();
+  if (box.isEmpty()) { orbit.target.set(0, 0.5, 0); camera.position.set(6, 4.5, 7.5); }
+  else {
+    const s = box.getBoundingSphere(new THREE.Sphere()), r = Math.max(s.radius, 0.5);
+    const dist = r / Math.sin(camera.fov * RAD / 2) * 1.1;
+    orbit.maxDistance = Math.max(150, dist * 2);
+    orbit.target.copy(s.center); camera.position.copy(s.center).addScaledVector(dir, dist);
+  }
+  orbit.update(); scheduleSave();
+}
 function focusSelected() {
   const box = new THREE.Box3();
   if (state.mode === 'edit' && edit.sel.size) edit.sel.forEach(g => box.expandByPoint(edit.groups[g].p.clone().applyMatrix4(edit.obj.mesh.matrixWorld)));
@@ -1510,7 +1556,7 @@ $('#mEdit').onclick = () => enterEdit();
 $('#btnSnap').onclick = () => setSnap(!state.snap);
 $('#btnSpace').onclick = () => { const l = transform.space === 'world'; transform.setSpace(l ? 'local' : 'world'); $('#btnSpace').textContent = l ? 'Local' : 'Global'; };
 $('#btnUndo').onclick = undo; $('#btnRedo').onclick = redo;
-$('#btnDup').onclick = duplicateSelected; $('#btnDel').onclick = deleteSelected; $('#btnFocus').onclick = focusSelected;
+$('#btnDup').onclick = duplicateSelected; $('#btnDel').onclick = deleteSelected; $('#btnFocus').onclick = focusSelected; $('#btnHome').onclick = resetView;
 $('#btnProjects').onclick = showProjects; $('#pClose').onclick = closeProjects;
 $('#projModal').addEventListener('click', e => { if (e.target.id === 'projModal') closeProjects(); });
 $('#pNewBlank').onclick = () => newProject(false); $('#pNewExample').onclick = () => newProject(true);
@@ -1558,6 +1604,39 @@ async function showPhone() {
   else code.remove();
 }
 $('#btnPhone').onclick = showPhone;
+
+/* ---- atualização automática (só na Forja instalada, no computador que roda o servidor) ---- */
+function showUpdate(u) {
+  const b = $('#btnUpdate');
+  if (!u || !u.instalado || !(u.disponivel || u.fase !== 'ok')) { b.hidden = true; return; }
+  b.hidden = false;
+  b.disabled = u.fase === 'baixando' || u.fase === 'instalando';
+  b.textContent = u.fase === 'baixando' ? `Baixando ${u.pct}%…` : u.fase === 'instalando' ? 'Instalando…' : u.fase === 'erro' ? 'Tentar atualizar de novo' : `Atualizar para ${u.nova}`;
+  b.title = u.erro ? 'Falhou: ' + u.erro : `Você está na ${u.atual}. Baixa a ${u.nova} e instala por cima; seus projetos continuam onde estão.`;
+}
+async function checkUpdate() {
+  if (!DB.server || !DB.server.local) return;
+  try { showUpdate(await DB.api('atualizacao')); } catch (e) {}
+}
+let updPoll;
+$('#btnUpdate').onclick = async () => {
+  await saveNow();
+  let u;
+  try { u = await DB.api('atualizacao', { method: 'POST' }); } catch (e) { toast(e.message); return; }
+  showUpdate(u);
+  const from = u.atual;
+  clearInterval(updPoll);
+  updPoll = setInterval(async () => {
+    try {
+      const s = await DB.api('atualizacao');
+      // servidor novo de pé com a versão nova: recarrega a página nela
+      if (s.atual !== from) { clearInterval(updPoll); location.reload(); return; }
+      showUpdate(s);
+      if (s.fase === 'erro') { clearInterval(updPoll); toast('A atualização falhou: ' + s.erro); }
+    } catch (e) { /* servidor reiniciando no meio da instalação */ }
+  }, 1500);
+};
+setInterval(checkUpdate, 10 * 60e3);
 $('#phClose').onclick = () => $('#phoneModal').hidden = true;
 $('#phoneModal').addEventListener('click', e => { if (e.target.id === 'phoneModal') $('#phoneModal').hidden = true; });
 $('#projName').addEventListener('input', e => { if (state.meta) { state.meta.name = e.target.value || 'Projeto sem título'; scheduleSave(); } });
@@ -1594,6 +1673,7 @@ window.addEventListener('keydown', e => {
     case 'r': setTool('rotate'); break;
     case 's': setTool('scale'); break;
     case 'f': focusSelected(); break;
+    case 'h': case 'home': resetView(); break;
     case 'x': case 'delete': deleteSelected(); break;
     case '1': setView('front'); break;
     case '3': setView('right'); break;
@@ -1638,6 +1718,8 @@ renderer.setAnimationLoop(() => {
   else await openProject(p);
   // botão Celular só no computador que roda o servidor (no próprio celular não faz sentido)
   $('#btnPhone').hidden = !(DB.server && DB.server.local);
+  // o servidor confere o GitHub assim que sobe: pergunta agora e de novo daqui a pouco, quando a resposta já chegou
+  checkUpdate(); setTimeout(checkUpdate, 15000);
   $('#loading').remove();
   updateModeUI(); setTool('translate'); updateUndo();
 })().catch(err => { $('#loading').textContent = 'Não deu para iniciar o editor: ' + err.message; console.error(err); });

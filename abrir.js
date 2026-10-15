@@ -21,6 +21,8 @@ const ping = () => new Promise(resolve => {
     for (let i = 0; i < 40 && !(await ping()); i++) await wait(150);
   }
   // node abrir.js --rede: já libera o acesso pelo celular (o mesmo que o botão "Celular" do app)
+  // depois de uma atualização o instalador chama "abrir.js --servidor": só o servidor, a janela que já estava aberta recarrega sozinha
+  if (process.argv.includes('--servidor')) return;
   if (process.argv.includes('--rede')) await new Promise(r => { const q = http.request(URL_APP + 'api/rede?ligar=1', { method: 'POST' }, res => { res.resume(); res.on('end', r); }); q.on('error', r); q.end(); });
   const L = process.env.LOCALAPPDATA || '', PF = process.env.ProgramFiles || '', PF86 = process.env['ProgramFiles(x86)'] || '';
   const nav = [

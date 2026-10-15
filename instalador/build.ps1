@@ -21,7 +21,7 @@ $html = [IO.File]::ReadAllText("$root\index.html")
 $cdn = 'https://cdn.jsdelivr.net/npm/three@0.160.0/'
 if (-not $html.Contains($cdn)) { throw "index.html não aponta mais para $cdn; atualize o build.ps1 junto." }
 [IO.File]::WriteAllText("$app\index.html", $html.Replace($cdn, './vendor/three/'), (New-Object Text.UTF8Encoding $false))
-foreach ($f in 'serve.js', 'abrir.js', 'README.md', 'VERSION') { Copy-Item "$root\$f" $app }
+foreach ($f in 'serve.js', 'abrir.js', 'atualizar.js', 'README.md', 'VERSION') { Copy-Item "$root\$f" $app }
 Copy-Item -Recurse "$root\assets" "$app\assets"
 Copy-Item -Recurse "$root\vendor" "$app\vendor"
 
@@ -58,13 +58,23 @@ if ($LASTEXITCODE -ne 0) { throw 'Inno Setup falhou' }
 $setup = "$PSScriptRoot\dist\Forja3D-Setup-$ver.exe"
 Write-Host ("Pronto: $setup ({0:N1} MB)" -f ((Get-Item $setup).Length / 1MB))
 
+# atualização automática: assina o setup com a chave privada (fora do projeto) e gera o atualizacao.json do lado
+$manifesto = "$PSScriptRoot\dist\atualizacao.json"
+if (Test-Path $manifesto) { Remove-Item $manifesto }
+node "$PSScriptRoot\assinar.js" $setup $ver
+if ($LASTEXITCODE -ne 0) {
+  if ($Publicar) { throw 'não deu pra assinar o setup (a chave está em %USERPROFILE%\.forja3d\chave-atualizacao.pem?)' }
+  Write-Warning 'Setup sem assinatura: serve para instalar à mão, mas não chega como atualização automática.'
+}
+
 if ($Publicar) {
   $repo = 'ailtonandrade/forja3d'
   $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
   & gh release view "v$ver" -R $repo 2>&1 | Out-Null; $existe = $LASTEXITCODE -eq 0
   $ErrorActionPreference = $old
-  if ($existe) { gh release upload "v$ver" $setup -R $repo --clobber }
-  else { gh release create "v$ver" $setup -R $repo --title "Forja 3D $ver" --notes "Versão $ver. Baixe o Forja3D-Setup-$ver.exe e instale." }
+  # a mesma versão de novo não chegaria em ninguém (as instaladas só atualizam para número maior)
+  if ($existe) { throw "A versão v$ver já foi publicada. Suba o número no VERSION e rode de novo." }
+  gh release create "v$ver" $setup $manifesto -R $repo --title "Forja 3D $ver" --notes "Versão $ver. Quem já tem a Forja instalada recebe o aviso de atualização no app; para instalar do zero, baixe o Forja3D-Setup-$ver.exe."
   if ($LASTEXITCODE -ne 0) { throw 'não deu pra publicar no GitHub (veja a mensagem do gh acima)' }
-  Write-Host "Publicado: https://github.com/$repo/releases/tag/v$ver"
+  Write-Host "Publicado: https://github.com/$repo/releases/tag/v$ver - as Forjas instaladas mostram o botão de atualizar em até 30 minutos (ou na próxima vez que abrirem)."
 }

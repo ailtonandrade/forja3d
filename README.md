@@ -4,7 +4,9 @@ Protótipo de modelador 3D que roda no navegador, feito com [three.js](https://t
 
 ## Instalar no Windows
 
-Baixe o `Forja3D-Setup-<versão>.exe` da [release mais recente](../../releases/latest) e instale. Não precisa de administrador nem de instalar mais nada: o Node e o three.js vão embutidos e o app abre numa janela própria do Chrome ou do Edge, funcionando offline.
+Baixe o `Forja3D-Setup-<versão>.exe` da [release mais recente](../../releases/latest) e instale. Não precisa de administrador nem de instalar mais nada: o Node e o three.js vão embutidos, o instalador cria o atalho **Forja 3D** na área de trabalho e no menu Iniciar, e o app abre numa janela própria do Chrome ou do Edge, funcionando offline.
+
+**Atualizações:** quando sai uma versão nova, aparece o botão **Atualizar para X** na barra de cima. Ele baixa o setup novo, confere a assinatura e instala por cima sozinho; a janela recarrega já na versão nova e os projetos continuam onde estavam.
 
 Os projetos ficam em `%LocalAppData%\Forja 3D\projetos` (um `.json` por projeto) e continuam lá se você desinstalar.
 
@@ -53,7 +55,9 @@ Sem o Node, qualquer servidor estático serve (`python -m http.server 8080`), ma
 
 ## Gerar um instalador novo
 
-Suba o número em `VERSION` e rode `instalador\publicar.bat`: monta o setup com o Inno Setup 6 e anexa na release do GitHub. Só montar, sem publicar: `powershell -ExecutionPolicy Bypass -File instalador\build.ps1`.
+Suba o número em `VERSION` e rode `instalador\publicar.bat`. Ele monta o setup com o Inno Setup 6, assina e cria a release `v<versão>` no GitHub com o setup e o `atualizacao.json`. As Forjas instaladas mostram o botão de atualizar em até 30 minutos (ou na próxima vez que abrirem). Só montar, sem publicar: `powershell -ExecutionPolicy Bypass -File instalador\build.ps1`.
+
+A atualização só é aceita se vier assinada com a chave privada em `%USERPROFILE%\.forja3d\chave-atualizacao.pem` (fica fora do repositório). **Faça backup dela:** sem essa chave, as Forjas já instaladas não aceitam mais nenhuma versão nova e cada pessoa teria que reinstalar à mão.
 
 ## Limitações conhecidas
 

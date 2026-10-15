@@ -32,19 +32,19 @@ ArchitecturesInstallIn64BitMode=x64compatible
 [Languages]
 Name: "pt"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
 
-[Tasks]
-Name: "desktopicon"; Description: "Criar atalho na área de trabalho"; GroupDescription: "Atalhos:"
-
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\runtime\node.exe"; Parameters: """{app}\abrir.js"""; WorkingDir: "{app}"; IconFilename: "{app}\assets\icone.ico"; Flags: runminimized
 Name: "{group}\Desinstalar {#AppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\runtime\node.exe"; Parameters: """{app}\abrir.js"""; WorkingDir: "{app}"; IconFilename: "{app}\assets\icone.ico"; Flags: runminimized; Tasks: desktopicon
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\runtime\node.exe"; Parameters: """{app}\abrir.js"""; WorkingDir: "{app}"; IconFilename: "{app}\assets\icone.ico"; Flags: runminimized
 
 [Run]
 Filename: "{app}\runtime\node.exe"; Parameters: """{app}\abrir.js"""; WorkingDir: "{app}"; Description: "Abrir a {#AppName} agora"; Flags: postinstall nowait skipifsilent runhidden
+; atualização automática (o app roda este setup com /ATUALIZACAO): no fim sobe só o servidor; a janela que já estava
+; aberta percebe a versão nova e recarrega sozinha
+Filename: "{app}\runtime\node.exe"; Parameters: """{app}\abrir.js"" --servidor"; WorkingDir: "{app}"; Flags: nowait runhidden; Check: EhAtualizacao
 
 [Code]
 // fecha o servidor da Forja desta instalação antes de atualizar ou desinstalar (o node.exe em uso trava a troca dos arquivos)
@@ -55,6 +55,11 @@ begin
     '-NoProfile -Command "Get-Process node -ErrorAction SilentlyContinue | Where-Object { $_.Path -like ''' +
     ExpandConstant('{app}') + '\runtime\*'' } | Stop-Process -Force"',
     '', SW_HIDE, ewWaitUntilTerminated, Code);
+end;
+
+function EhAtualizacao: Boolean;
+begin
+  Result := Pos('/ATUALIZACAO', UpperCase(GetCmdTail)) > 0;
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;

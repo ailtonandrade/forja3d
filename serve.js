@@ -7,6 +7,7 @@ const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const atualizar = require('./atualizar');   // atualização automática (versão publicada no GitHub, assinada)
 
 const PORT = Number(process.argv[2] || process.env.PORT || 4630);
 const PORT_REDE = PORT + 1;
@@ -77,6 +78,12 @@ async function api(req, res, u) {
     const on = u.searchParams.get('ligar') !== '0';
     const ok = await setRede(on);
     return sendJson(res, ok || !on ? 200 : 500, { rede: lanServers.length > 0, urls: lanUrls() });
+  }
+  if (parts[1] === 'atualizacao') {
+    if (req.method !== 'POST') return sendJson(res, 200, atualizar.estado());
+    if (!isLocal(req)) return sendJson(res, 403, { erro: 'Só o próprio computador pode instalar atualizações.' });
+    const r = atualizar.instalar();
+    return sendJson(res, r.erro ? 400 : 200, r.erro ? r : atualizar.estado());
   }
   if (parts[1] !== 'projetos') return sendJson(res, 404, { erro: 'rota desconhecida' });
   const id = parts[2];
