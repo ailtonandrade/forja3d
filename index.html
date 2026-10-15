@@ -104,6 +104,10 @@ button{cursor:pointer}
 #outliner li:hover{background:var(--raised)}
 #outliner li.on{background:var(--raised-2);box-shadow:inset 2px 0 0 var(--accent)}
 #outliner li.multi{background:var(--raised);box-shadow:inset 2px 0 0 var(--sel)}
+@keyframes flashSel{0%{background:rgba(224,138,79,.55)}100%{background:var(--raised-2)}}
+#outliner li.flash{animation:flashSel .9s ease-out}
+@media (prefers-reduced-motion:reduce){#outliner li.flash{animation:none}}
+#outliner li{-webkit-touch-callout:none}
 /* Shift + clique na lista soma objetos: sem isso o navegador selecionava o texto */
 #outliner,#tools,#top,#vpTop,#tabs,#status,#brushBar,.ph{user-select:none;-webkit-user-select:none}
 #top input,#brushBar input{user-select:text;-webkit-user-select:text}
@@ -885,7 +889,7 @@ function selectObject(o, add = false) {
   } else state.multi = o ? [o] : [];
   if (o !== state.selected) join.open = false;
   state.selected = o || null;
-  if (o && state.mode === 'object') { transform.attach(o.mesh); boxHelper.setFromObject(o.mesh); boxHelper.visible = true; }
+  if (o && state.mode === 'object') { attachObjectGizmo(); boxHelper.setFromObject(o.mesh); boxHelper.visible = true; }
   else if (!o) { transform.detach(); boxHelper.visible = false; }
   // caixas azuis nos outros objetos da seleção
   while (multiBoxes.length) { const b = multiBoxes.pop(); scene.remove(b); b.geometry.dispose(); }
@@ -1021,7 +1025,7 @@ function exitEdit() {
   if (edit.overlay) { m.remove(edit.overlay); edit.overlay.geometry.dispose(); edit.overlay = null; }
   if (brush.on) setBrush(false, true);
   transform.detach(); state.mode = 'object'; edit.obj = null; edit.sel.clear(); edit.box = false;
-  if (state.selected) { transform.attach(state.selected.mesh); boxHelper.setFromObject(state.selected.mesh); boxHelper.visible = true; }
+  if (state.selected) { attachObjectGizmo(); boxHelper.setFromObject(state.selected.mesh); boxHelper.visible = true; }
   buildAbTags(); updateModeUI(); renderPanel(); refreshStatus();
 }
 function toggleEdit() { state.mode === 'edit' ? exitEdit() : enterEdit(); }
@@ -1711,25 +1715,72 @@ viewport.addEventListener('pointermove', e => {
 viewport.addEventListener('pointerleave', () => { if (brush.on && !brush.stroke) { brushCursor.visible = false; if (state.mode === 'edit') paintSelection(); } });
 
 /* ================= Gizmo ================= */
+// Seleção múltipla: o gizmo fica num pivô no centro do grupo e o movimento dele vale para todos os objetos.
+const multiPivot = new THREE.Object3D(); scene.add(multiPivot);
+let multiStart = null;
+const multiStartInv = new THREE.Matrix4();
+function placeMultiPivot() {
+  const b = new THREE.Box3(); state.multi.forEach(x => b.expandByObject(x.mesh));
+  b.getCenter(multiPivot.position); multiPivot.quaternion.identity(); multiPivot.scale.set(1, 1, 1); multiPivot.updateMatrixWorld();
+}
+function attachObjectGizmo() {
+  if (!state.selected) { transform.detach(); return; }
+  if (state.multi.length >= 2) { placeMultiPivot(); transform.attach(multiPivot); } else transform.attach(state.selected.mesh);
+}
+
+// Ctrl segurado enquanto gira ou escala: o movimento anda a 15% da velocidade, para ajuste fino. Apertar ou soltar
+// o Ctrl no meio do arrasto "ancora" onde está, então a peça não dá pulo.
+const keys = { ctrl: false };
+window.addEventListener('keydown', e => { if (e.key === 'Control') keys.ctrl = true; }, true);
+window.addEventListener('keyup', e => { if (e.key === 'Control') keys.ctrl = false; }, true);
+window.addEventListener('pointermove', e => { keys.ctrl = e.ctrlKey; }, true);
+window.addEventListener('blur', () => { keys.ctrl = false; });
+const PRECISE = 0.15;
+let prec = null;
+function precisionStart(obj) {
+  prec = { tcQ: obj.quaternion.clone(), outQ: obj.quaternion.clone(), tcS: obj.scale.clone(), outS: obj.scale.clone(), lastQ: obj.quaternion.clone(), lastS: obj.scale.clone(), ctrl: keys.ctrl };
+}
+function precisionApply(obj) {
+  if (!prec || (transform.mode !== 'rotate' && transform.mode !== 'scale')) return;
+  if (keys.ctrl !== prec.ctrl) { prec.tcQ.copy(obj.quaternion); prec.outQ.copy(prec.lastQ); prec.tcS.copy(obj.scale); prec.outS.copy(prec.lastS); prec.ctrl = keys.ctrl; }
+  const k = prec.ctrl ? PRECISE : 1;
+  const turned = obj.quaternion.clone().multiply(prec.tcQ.clone().invert());   // giro feito desde a âncora
+  const q = new THREE.Quaternion().slerp(turned, k).multiply(prec.outQ);
+  const s = prec.outS.clone().add(obj.scale.clone().sub(prec.tcS).multiplyScalar(k));
+  obj.quaternion.copy(q); obj.scale.copy(s); prec.lastQ.copy(q); prec.lastS.copy(s);
+}
+
 let dragging = false, dragChanged = false;
 transform.addEventListener('dragging-changed', e => {
   orbit.enabled = !e.value; dragging = e.value;
-  if (e.value) dragChanged = false;
+  if (e.value) { dragChanged = false; precisionStart(transform.object); }
+  else prec = null;
   if (e.value && state.mode === 'edit') {
     edit.pivot.updateMatrixWorld();
     edit.startInv.copy(edit.pivot.matrixWorld).invert();
     edit.orig = edit.groups.map(g => g.p.clone());
     edit.affected = computeAffected();
   }
+  if (e.value && transform.object === multiPivot) {
+    multiPivot.updateMatrixWorld(); multiStartInv.copy(multiPivot.matrixWorld).invert();
+    multiStart = state.multi.map(x => { x.mesh.updateMatrix(); return x.mesh.matrix.clone(); });
+  }
   if (!e.value && dragChanged) {
     if (state.mode === 'edit') { markModified(); placePivot(); }
+    if (transform.object === multiPivot) { multiStart = null; placeMultiPivot(); }
     commit();
   }
 });
-const _M = new THREE.Matrix4(), _inv = new THREE.Matrix4(), _v = new THREE.Vector3();
+const _M = new THREE.Matrix4(), _M2 = new THREE.Matrix4(), _inv = new THREE.Matrix4(), _v = new THREE.Vector3();
 transform.addEventListener('objectChange', () => {
   dragChanged = true;
-  if (state.mode === 'edit' && edit.orig) {
+  precisionApply(transform.object);
+  if (transform.object === multiPivot && multiStart) {
+    multiPivot.updateMatrixWorld();
+    _M.multiplyMatrices(multiPivot.matrixWorld, multiStartInv);
+    state.multi.forEach((x, i) => { _M2.multiplyMatrices(_M, multiStart[i]); _M2.decompose(x.mesh.position, x.mesh.quaternion, x.mesh.scale); });
+    boxHelper.update(); updateTransformFields();
+  } else if (state.mode === 'edit' && edit.orig) {
     const mw = edit.obj.mesh.matrixWorld;
     edit.pivot.updateMatrixWorld();
     _inv.copy(mw).invert();
@@ -1754,19 +1805,32 @@ function visibleVertex(g) {
   const hit = occRay.intersectObject(edit.obj.mesh, false)[0];
   return !hit || hit.distance >= dist - Math.max(1e-3, dist * 2e-3);
 }
+// No toque, tocar e segurar (sem arrastar) soma à seleção, como Shift + clique no computador
+const LONG_PRESS = 480;
 renderer.domElement.addEventListener('pointerdown', e => {
+  if (down && down.timer && !e.isPrimary) { clearTimeout(down.timer); down.timer = null; }   // segundo dedo: é gesto de câmera
+  if (!e.isPrimary) return;
   const p = ndc(e);
   down = { x: p.x, y: p.y, btn: e.button, onGizmo: transform.axis !== null && transform.object !== undefined, box: edit.box && e.button === 0 };
   if (down.box) { orbit.enabled = false; Object.assign(selrect.style, { left: p.x + 'px', top: p.y + 'px', width: '0px', height: '0px' }); selrect.hidden = false; }
+  if (e.pointerType === 'touch' && e.button === 0 && !down.box && !down.onGizmo && !brush.on) {
+    const d = down, at = { clientX: e.clientX, clientY: e.clientY, shiftKey: true, pointerType: 'touch' };
+    d.timer = setTimeout(() => { if (down !== d) return; d.long = true; navigator.vibrate?.(25); clickSelect(at); }, LONG_PRESS);
+  }
 });
 renderer.domElement.addEventListener('pointermove', e => {
-  if (!down || !down.box) return;
+  if (!down) return;
   const p = ndc(e);
+  if (down.timer && Math.hypot(p.x - down.x, p.y - down.y) > 10) { clearTimeout(down.timer); down.timer = null; }
+  if (!down.box) return;
   Object.assign(selrect.style, { left: Math.min(p.x, down.x) + 'px', top: Math.min(p.y, down.y) + 'px', width: Math.abs(p.x - down.x) + 'px', height: Math.abs(p.y - down.y) + 'px' });
 });
+renderer.domElement.addEventListener('pointercancel', () => { if (down && down.timer) clearTimeout(down.timer); down = null; });
 renderer.domElement.addEventListener('pointerup', e => {
-  if (!down) return;
+  if (!down || !e.isPrimary) return;
   const p = ndc(e), moved = Math.hypot(p.x - down.x, p.y - down.y), d = down; down = null;
+  if (d.timer) clearTimeout(d.timer);
+  if (d.long) return;   // o toque longo já selecionou
   if (d.box) {
     selrect.hidden = true; orbit.enabled = true; edit.box = false;
     if (!e.shiftKey) edit.sel.clear();
@@ -1779,6 +1843,11 @@ renderer.domElement.addEventListener('pointerup', e => {
     selectionChanged(); renderPanel(); return;
   }
   if (d.btn !== 0 || moved > (e.pointerType === 'touch' ? 10 : 4) || d.onGizmo || dragging || brush.on) return;
+  clickSelect(e);
+});
+// seleção por clique/toque no ponto (e.shiftKey = somar à seleção)
+function clickSelect(e) {
+  const p = ndc(e);
   ray.setFromCamera(new THREE.Vector2(p.x / p.w * 2 - 1, -(p.y / p.h) * 2 + 1), camera);
   if (state.mode === 'edit' && edit.selMode !== 'vert') { pickElement(e); return; }
   if (state.mode === 'edit') {
@@ -1802,7 +1871,7 @@ renderer.domElement.addEventListener('pointerup', e => {
   const hitObj = hits.length ? state.objects.find(o => (o.pick || o.mesh) === hits[0].object) : null;
   if (e.shiftKey && !hitObj) return;   // Shift + clique no vazio não desfaz a seleção
   selectObject(hitObj, e.shiftKey);
-});
+}
 renderer.domElement.addEventListener('dblclick', () => { if (state.selected && state.mode === 'object') toggleEdit(); });
 
 /* ================= Câmera ================= */
@@ -2424,7 +2493,13 @@ function renderOutliner() {
     const eye = el('button', { class: 'eye' + (o.mesh.visible ? '' : ' off'), title: o.mesh.visible ? 'Ocultar' : 'Mostrar', onclick: e => { e.stopPropagation(); o.mesh.visible = !o.mesh.visible; if (!o.mesh.visible && state.selected === o) selectObject(null); commit(); } });
     eye.innerHTML = '<svg viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
     const nm = el('span', { class: 'nm' }, o.name);
-    const li = el('li', { class: state.selected === o ? 'on' : state.multi.includes(o) ? 'multi' : '', onclick: e => selectObject(o, e.shiftKey),
+    // toque longo no item soma à seleção (o toque comum continua selecionando só ele)
+    let lp = null, lpFired = false;
+    const li = el('li', { class: state.selected === o ? 'on' : state.multi.includes(o) ? 'multi' : '', 'data-id': o.id,
+      onclick: e => { if (lpFired) { lpFired = false; return; } selectObject(o, e.shiftKey); },
+      onpointerdown: e => { if (e.pointerType !== 'touch') return; lpFired = false; lp = setTimeout(() => { lpFired = true; navigator.vibrate?.(25); selectObject(o, true); }, LONG_PRESS); },
+      onpointerup: () => clearTimeout(lp), onpointercancel: () => clearTimeout(lp), onpointerleave: () => clearTimeout(lp),
+      oncontextmenu: e => e.preventDefault(),
       ondblclick: () => {
         const inp = el('input', { value: o.name, onkeydown: e => { if (e.key === 'Enter') inp.blur(); if (e.key === 'Escape') { inp.value = o.name; inp.blur(); } e.stopPropagation(); },
           onblur: () => { const v = inp.value.trim(); if (v && v !== o.name) { o.name = v; commit(); } renderOutliner(); renderPanel(); } });
@@ -2436,7 +2511,20 @@ function renderOutliner() {
     ul.append(li);
   }
   if (!state.objects.length) ul.append(el('li', { style: 'cursor:default;color:var(--muted)' }, 'Cena vazia. Use o + para adicionar.'));
+  // selecionou outro objeto (no viewport, por exemplo): a lista rola até ele e ele pisca em destaque
+  if (state.selected !== outlinerShown) {
+    outlinerShown = state.selected;
+    const item = state.selected && ul.querySelector(`li[data-id="${state.selected.id}"]`);
+    // rola só a própria lista (scrollIntoView arrastava a tela inteira quando o painel fica escondido no celular)
+    if (item) {
+      const ur = ul.getBoundingClientRect(), ir = item.getBoundingClientRect();
+      const delta = ir.top < ur.top ? ir.top - ur.top - 4 : ir.bottom > ur.bottom ? ir.bottom - ur.bottom + 4 : 0;
+      if (delta) ul.scrollTo({ top: ul.scrollTop + delta, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+      item.classList.add('flash');
+    }
+  }
 }
+let outlinerShown = null;
 function refreshStatus() {
   let v = 0, t = 0;
   let nl = 0;

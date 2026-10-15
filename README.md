@@ -32,7 +32,7 @@ Sem o Node, qualquer servidor estático serve (`python -m http.server 8080`), ma
 ## O que dá pra fazer
 
 - **Projetos**: criar, abrir, duplicar e excluir, com miniatura e salvamento automático. Desfazer/refazer com Ctrl+Z / Ctrl+Shift+Z (sem tirar você da ferramenta em uso). O projeto de **modelo** (casinha estilo Pixar com um humano esculpido, em `exemplos/`) abre na primeira vez e em **Novo a partir do modelo**.
-- **Modo objeto**: cubo, esfera, icoesfera, cilindro, cone, toro e plano com parâmetros editáveis; gizmo de mover/girar/escalar; ímã de grade; eixos global/local; **câmera padrão** (H). **Juntar objetos** transforma vários objetos em um só e solda os vértices encostados (o Ctrl+J do Blender). **Booleanas**: selecione vários com Shift + clique (o primeiro é o **A**) e use **A corta B** (ex.: um cilindro abrindo uma janela na parede), **Unir A + B** ou **Só o que se cruza**; o A fica escondido para reaproveitar.
+- **Modo objeto**: cubo, esfera, icoesfera, cilindro, cone, toro e plano com parâmetros editáveis; gizmo de mover/girar/escalar; ímã de grade; eixos global/local; **câmera padrão** (H). **Juntar objetos** transforma vários objetos em um só e solda os vértices encostados (o Ctrl+J do Blender). **Booleanas**: selecione vários com Shift + clique (o primeiro é o **A**) e use **A corta B** (ex.: um cilindro abrindo uma janela na parede), **Unir A + B** ou **Só o que se cruza**; o A fica escondido para reaproveitar. Com vários selecionados, o gizmo fica no centro do grupo e move, gira e escala todos juntos. No celular, **tocar e segurar** num objeto soma ele à seleção.
 - **Modo edição** (Tab ou duplo clique no objeto): selecionar por **vértices, arestas ou faces**; **Extrudar** (E) faces ou arestas e **Cortar em loop** (C; Shift+C = 2 cortes), os dois com prévia antes de aplicar (mova o mouse para ajustar, clique ou Enter aplica, Esc cancela); selecionar vértices por clique, face ou caixa; **edição proporcional** (puxa os vizinhos junto); Inflar, Murchar, Suavizar, Ruído, Achatar; Subdividir; **Unir vértices** próximos (com distância) ou a seleção no centro. A área que vai se mexer fica pintada de laranja, mais forte onde o movimento é total.
 - **Pincel de esculpir** (P): Puxar, Arrastar, Inflar, Suavizar e Achatar, com **tamanho**, **força**, **núcleo** (a parte do centro que empurra com força total) e **queda** (suave, linear ou agulha) até a borda. A área que o pincel vai afetar aparece em azul antes de tocar. **Subdividir ao esculpir** (o Dyntopo do Blender) cria polígonos onde a superfície estica, com controle de **Detalhe**.
 - **Materiais PBR**: cor, metálico, rugosidade, opacidade, emissão; textura de cor e de relevo enviadas do computador ou geradas na hora: telhas, reboco, tábuas, pedras, grama, terra, casca de árvore, folhagem, jeans, malha, couro, cabelo, tijolos, madeira, ruído e grade UV; repetição U/V.
@@ -49,6 +49,8 @@ Sem o Node, qualquer servidor estático serve (`python -m http.server 8080`), ma
 | P | Ligar/desligar o pincel |
 | [ e ] | Diminuir/aumentar o pincel |
 | Ctrl (segurando) | Inverte o pincel (afunda em vez de puxar) |
+| Ctrl (segurando, girando ou escalando) | Movimento lento, para ajuste fino |
+| Shift + clique | Soma ou tira objetos da seleção (no celular: tocar e segurar) |
 | Shift+A | Adicionar objeto |
 | Shift+D | Duplicar |
 | X ou Delete | Excluir |
