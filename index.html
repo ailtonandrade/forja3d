@@ -322,6 +322,8 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RectAreaLightUniformsLib } from 'three/addons/lights/RectAreaLightUniformsLib.js';
+RectAreaLightUniformsLib.init();   // a luz de área (softbox) precisa disso uma vez
 
 const $ = s => document.querySelector(s);
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -357,7 +359,8 @@ viewport.prepend(renderer.domElement);
 
 const scene = new THREE.Scene();
 const pmrem = new THREE.PMREMGenerator(renderer);
-scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
+const studioEnv = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
+scene.environment = studioEnv;
 
 const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 600);
 camera.position.set(6, 4.5, 7.5);
@@ -431,7 +434,8 @@ const state = {
 const matCache = new Map();
 const texClones = new Map();
 
-const defaultScene = () => ({ background: '#1d222a', grid: true, env: 1, sun: 2.4, exposure: 1, shadows: true });
+const defaultScene = () => ({ background: '#1d222a', grid: true, env: 1, sun: 2.4, exposure: 1, shadows: true,
+  sunColor: '#fff3e6', sunElev: 55, sunAzim: 51, sky: '#dfe8ff', ground: '#2a2622', hemi: 0.35, envMode: 'estudio' });
 const defaultMat = () => ({ id: uid(), name: 'Material', color: '#b9bfc8', metalness: 0, roughness: 0.55, emissive: '#000000', emissiveIntensity: 1, opacity: 1, wireframe: false, flat: false, doubleSided: false, map: null, bump: null, bumpScale: 1, repeat: [1, 1] });
 
 /* ================= Primitivas ================= */
@@ -703,6 +707,7 @@ function getMat(def) {
   return m;
 }
 function applyShading(o) {
+  if (o.prim === 'light') return;
   o.mesh.material = state.shading === 'material' ? getMat(matById(o.matId)) : state.shading === 'solid' ? solidMat : wireMat;
 }
 function setShading(s) {
@@ -711,8 +716,94 @@ function setShading(s) {
   state.objects.forEach(applyShading);
 }
 
+/* ================= Luzes ================= */
+// Cada luz é um objeto da cena: um grupo com a luz, o ícone que você clica e um traço mostrando para onde ela aponta.
+// Sol, spot e área apontam para o -Z do grupo: girar (R) muda a direção.
+const LIGHTS = {
+  sun: { label: 'Sol (luz infinita)', short: 'sol', def: { color: '#fff1d6', intensity: 2.5, shadow: true } },
+  spot: { label: 'Spot', short: 'spot', def: { color: '#ffffff', intensity: 40, shadow: true, angle: 28, penumbra: 0.35, distance: 0 } },
+  point: { label: 'Ponto (lâmpada)', short: 'ponto', def: { color: '#ffd59a', intensity: 10, shadow: false, distance: 0 } },
+  area: { label: 'Área (softbox)', short: 'área', def: { color: '#ffffff', intensity: 8, w: 1.2, h: 0.8 } },
+};
+// cor de uma temperatura de cor em Kelvin (aproximação de Tanner Helland)
+function kelvin(k) {
+  const t = k / 100;
+  const r = t <= 66 ? 255 : 329.698727446 * Math.pow(t - 60, -0.1332047592);
+  const g = t <= 66 ? 99.4708025861 * Math.log(t) - 161.1195681661 : 288.1221695283 * Math.pow(t - 60, -0.0755148492);
+  const b = t >= 66 ? 255 : t <= 19 ? 0 : 138.5177312231 * Math.log(t - 10) - 305.0447927307;
+  const h = v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
+  return '#' + h(r) + h(g) + h(b);
+}
+const noRay = m => { m.raycast = () => {}; return m; };
+function lineGeo(pts) { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3)); return g; }
+function spotLines(angle, len = 0.8) {
+  const r = Math.tan(angle * RAD) * len, pts = [], N = 32;
+  for (let i = 0; i < N; i++) { const a = i / N * Math.PI * 2, b = (i + 1) / N * Math.PI * 2; pts.push(Math.cos(a) * r, Math.sin(a) * r, -len, Math.cos(b) * r, Math.sin(b) * r, -len); }
+  for (let i = 0; i < 4; i++) { const a = i / 4 * Math.PI * 2; pts.push(0, 0, 0, Math.cos(a) * r, Math.sin(a) * r, -len); }
+  return lineGeo(pts);
+}
+function createLight(od) {
+  const type = (od.light && od.light.type) || 'point', L = { ...LIGHTS[type].def, ...(od.light || {}), type };
+  const o = { id: od.id || uid(), name: od.name, prim: 'light', light: L, params: null, matId: null };
+  const g = new THREE.Group(), col = new THREE.Color(L.color);
+  let li;
+  if (type === 'sun') {
+    li = new THREE.DirectionalLight(col, L.intensity);
+    Object.assign(li.shadow.camera, { left: -10, right: 10, top: 10, bottom: -10, near: 0.1, far: 60 });
+    li.shadow.mapSize.set(2048, 2048);
+  } else if (type === 'spot') { li = new THREE.SpotLight(col, L.intensity, L.distance || 0, L.angle * RAD, L.penumbra, 2); li.shadow.mapSize.set(1024, 1024); }
+  else if (type === 'point') { li = new THREE.PointLight(col, L.intensity, L.distance || 0, 2); li.shadow.mapSize.set(512, 512); }
+  else li = new THREE.RectAreaLight(col, L.intensity, L.w, L.h);
+  li.shadow && (li.shadow.bias = -0.0004, li.shadow.normalBias = 0.02);
+  li.castShadow = !!L.shadow && type !== 'area';
+  if (li.target) { li.target.position.set(0, 0, -1); g.add(li.target); }
+  g.add(li);
+  const iconMat = new THREE.MeshBasicMaterial({ color: col, toneMapped: false, side: THREE.DoubleSide, transparent: type === 'area', opacity: 0.85 });
+  const icon = new THREE.Mesh(type === 'area' ? new THREE.PlaneGeometry(1, 1) : new THREE.SphereGeometry(type === 'sun' ? 0.16 : type === 'spot' ? 0.07 : 0.09, 16, 12), iconMat);
+  if (type === 'area') icon.scale.set(L.w, L.h, 1);
+  g.add(icon);
+  let extra = null;
+  if (type !== 'point') {
+    extra = noRay(new THREE.LineSegments(type === 'spot' ? spotLines(L.angle) : lineGeo([0, 0, 0, 0, 0, type === 'sun' ? -1.4 : -0.7]), new THREE.LineBasicMaterial({ color: col, toneMapped: false })));
+    g.add(extra);
+  }
+  g.userData.objId = o.id;
+  if (od.pos) g.position.fromArray(od.pos);
+  if (od.rot) g.rotation.set(od.rot[0], od.rot[1], od.rot[2]);
+  g.visible = od.visible !== false;
+  Object.assign(o, { mesh: g, pick: icon, icon, extra, lightObj: li });
+  scene.add(g); state.objects.push(o);
+  return o;
+}
+function updateLight(o) {
+  const L = o.light, li = o.lightObj, col = new THREE.Color(L.color);
+  li.color.copy(col); li.intensity = L.intensity;
+  if (L.type === 'spot') { li.angle = L.angle * RAD; li.penumbra = L.penumbra; li.distance = L.distance || 0; o.extra.geometry.dispose(); o.extra.geometry = spotLines(L.angle); }
+  if (L.type === 'point') li.distance = L.distance || 0;
+  if (L.type === 'area') { li.width = L.w; li.height = L.h; o.icon.scale.set(L.w, L.h, 1); }
+  else li.castShadow = !!L.shadow;
+  o.icon.material.color.copy(col); if (o.extra) o.extra.material.color.copy(col);
+}
+// gira o grupo para o -Z (para onde a luz aponta) mirar no ponto
+function aimAt(g, p) { g.quaternion.setFromRotationMatrix(new THREE.Matrix4().lookAt(g.position, p, new THREE.Vector3(0, 1, 0))); g.updateMatrixWorld(); }
+function addLight(type) {
+  if (state.mode === 'edit') exitEdit();
+  const t = orbit.target, off = { sun: [4, 6, 3], spot: [2.5, 3.5, 2.5], point: [0.8, 1.8, 0.8], area: [0, 2.2, 2.2] }[type];
+  const o = createLight({ name: uniqueName(LIGHTS[type].label.split(' (')[0]), light: { type }, pos: [t.x + off[0], t.y + off[1], t.z + off[2]] });
+  if (type !== 'point') aimAt(o.mesh, t);
+  selectObject(o); commit();
+  toast(`${LIGHTS[type].label} adicionada. Mova com G e gire com R para mirar.`);
+}
+function disposeObj(o) {
+  if (o.prim !== 'light') { o.mesh.geometry.dispose(); return; }
+  o.mesh.traverse(c => { c.geometry?.dispose(); c.material?.dispose(); });
+  o.lightObj.dispose?.();
+}
+const lightHelpers = () => state.objects.filter(o => o.prim === 'light').flatMap(o => [o.icon, o.extra]).filter(Boolean);
+
 /* ================= Objetos ================= */
 function createObject(od) {
+  if (od.prim === 'light') return createLight(od);
   const o = { id: od.id || uid(), name: od.name, prim: od.prim, params: od.params ? { ...od.params } : null, matId: od.mat };
   if (!state.materials.find(m => m.id === o.matId)) o.matId = state.materials[0].id;
   const mesh = new THREE.Mesh(buildGeometry(o, od.geo), solidMat);
@@ -729,7 +820,8 @@ function serObj(o) {
   const m = o.mesh;
   const d = { id: o.id, name: o.name, prim: o.prim, mat: o.matId, visible: m.visible,
     pos: m.position.toArray().map(r4), rot: [m.rotation.x, m.rotation.y, m.rotation.z].map(r4), scl: m.scale.toArray().map(r4) };
-  if (o.prim === 'custom') d.geo = serGeo(m.geometry); else d.params = { ...o.params };
+  if (o.prim === 'light') { d.light = { ...o.light }; delete d.mat; }
+  else if (o.prim === 'custom') d.geo = serGeo(m.geometry); else d.params = { ...o.params };
   return d;
 }
 function uniqueName(base) {
@@ -754,7 +846,7 @@ function duplicateSelected() {
 function deleteSelected() {
   const s = state.selected; if (!s) return;
   if (state.mode === 'edit') { toast('Excluir vértices ainda não existe neste protótipo. Saia do modo edição (Tab) para excluir o objeto.'); return; }
-  transform.detach(); scene.remove(s.mesh); s.mesh.geometry.dispose();
+  transform.detach(); scene.remove(s.mesh); disposeObj(s);
   state.objects = state.objects.filter(o => o !== s);
   selectObject(null); commit();
 }
@@ -845,6 +937,7 @@ function paintPoints() {
 }
 function enterEdit() {
   const o = state.selected; if (!o) { toast('Selecione um objeto antes de entrar no modo edição.'); return; }
+  if (o.prim === 'light') { toast('Luzes não têm vértices para editar. Use o painel para mudar cor, força e abertura.'); return; }
   state.mode = 'edit'; edit.obj = o; edit.sel.clear(); edit.modified = false; edit.affected = [];
   ensureIndex(o.mesh.geometry);
   edit.wire = new THREE.Mesh(o.mesh.geometry, new THREE.MeshBasicMaterial({ color: 0x0b0d10, wireframe: true, transparent: true, opacity: 0.4, depthFunc: THREE.LessEqualDepth }));
@@ -1320,8 +1413,8 @@ renderer.domElement.addEventListener('pointerup', e => {
     for (const g of picks) { if (e.shiftKey && edit.sel.has(g) && picks.length === 1) edit.sel.delete(g); else edit.sel.add(g); }
     selectionChanged(); return;
   }
-  const hits = ray.intersectObjects(state.objects.filter(o => o.mesh.visible).map(o => o.mesh), false);
-  selectObject(hits.length ? state.objects.find(o => o.mesh === hits[0].object) : null);
+  const hits = ray.intersectObjects(state.objects.filter(o => o.mesh.visible).map(o => o.pick || o.mesh), false);
+  selectObject(hits.length ? state.objects.find(o => (o.pick || o.mesh) === hits[0].object) : null);
 });
 renderer.domElement.addEventListener('dblclick', () => { if (state.selected && state.mode === 'object') toggleEdit(); });
 
@@ -1378,7 +1471,7 @@ function applyData(d, opts = {}) {
   const keepId = state.selected && state.selected.id, wasEdit = state.mode === 'edit', wasBrush = brush.on;
   if (wasEdit) exitEdit();
   transform.detach(); state.selected = null;
-  for (const o of state.objects) { scene.remove(o.mesh); o.mesh.geometry.dispose(); }
+  for (const o of state.objects) { scene.remove(o.mesh); disposeObj(o); }
   state.objects = [];
   const nt = {};
   const sameTex = (o, t) => o && (t.gen ? JSON.stringify(o.gen) === JSON.stringify(t.gen) : !o.gen && o.src === t.src);
@@ -1397,12 +1490,45 @@ function applyData(d, opts = {}) {
   if (sel && wasEdit) { enterEdit(); if (wasBrush) setBrush(true, true); }
   renderOutliner(); renderPanel(); refreshStatus();
 }
+function sunDir(s) {
+  const e = s.sunElev * RAD, a = s.sunAzim * RAD;
+  return new THREE.Vector3(Math.cos(e) * Math.sin(a), Math.sin(e), Math.cos(e) * Math.cos(a));
+}
+// Reflexo "Céu e sol": um céu em degradê com o disco do sol, convertido em mapa de reflexo. Metal e vidro passam a
+// refletir o céu e o brilho do sol na direção certa. Fica guardado por combinação de cores/posição.
+const skyEnvCache = new Map();
+function skyEnv(s) {
+  const key = [s.sky, s.ground, s.sunColor, s.sunElev, s.sunAzim, s.sun].join('|');
+  if (skyEnvCache.has(key)) return skyEnvCache.get(key);
+  const mat = new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false,
+    uniforms: { top: { value: new THREE.Color(s.sky) }, bottom: { value: new THREE.Color(s.ground) }, sunDir: { value: sunDir(s) }, sunCol: { value: new THREE.Color(s.sunColor).multiplyScalar(3 + s.sun * 6) } },
+    vertexShader: 'varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: 'uniform vec3 top; uniform vec3 bottom; uniform vec3 sunDir; uniform vec3 sunCol; varying vec3 vDir;' +
+      'void main(){ vec3 d = normalize(vDir); float h = d.y; vec3 horizon = mix(bottom, top, 0.6) * 1.2;' +
+      'vec3 c = h > 0.0 ? mix(horizon, top, pow(h, 0.55)) : mix(horizon, bottom, pow(-h, 0.35));' +
+      'float k = max(dot(d, sunDir), 0.0); c += sunCol * (pow(k, 1200.0) * 6.0 + pow(k, 24.0) * 0.08); gl_FragColor = vec4(c, 1.0); }',
+  });
+  const sc = new THREE.Scene(), sphere = new THREE.Mesh(new THREE.SphereGeometry(10, 64, 32), mat);
+  sc.add(sphere);
+  const tex = pmrem.fromScene(sc, 0).texture;
+  sphere.geometry.dispose(); mat.dispose();
+  if (skyEnvCache.size > 3) { const [k0, t0] = skyEnvCache.entries().next().value; if (t0 !== scene.environment) t0.dispose(); skyEnvCache.delete(k0); }
+  skyEnvCache.set(key, tex);
+  return tex;
+}
+let envTimer;
 function applyScene() {
   const s = state.sceneSettings;
   scene.background = new THREE.Color(s.background);
-  grid.visible = s.grid; sun.intensity = s.sun; sun.castShadow = s.shadows;
+  grid.visible = s.grid; sun.intensity = s.sun; sun.castShadow = s.shadows; sun.color.set(s.sunColor);
+  sun.position.copy(sunDir(s)).multiplyScalar(14);
+  hemi.color.set(s.sky); hemi.groundColor.set(s.ground); hemi.intensity = s.hemi;
   renderer.toneMappingExposure = s.exposure;
   for (const m of matCache.values()) m.envMapIntensity = s.env;
+  // refazer o céu de reflexo custa um pouco: espera o controle parar de mexer
+  clearTimeout(envTimer);
+  envTimer = setTimeout(() => { scene.environment = s.envMode === 'ceu' ? skyEnv(s) : s.envMode === 'nenhum' ? null : studioEnv; }, s.envMode === 'ceu' ? 120 : 0);
 }
 
 /* ================= Projetos (servidor Node do PC ou IndexedDB) ================= */
@@ -1447,7 +1573,7 @@ function setSaveState(t) { $('#saveState').textContent = t; }
 function scheduleSave() { setSaveState('Alterações não salvas'); clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 900); }
 function captureThumb() {
   try {
-    const hide = [grid, tHelper, boxHelper, edit.points, edit.wire, edit.overlay, brushCursor].filter(Boolean), vis = hide.map(h => h.visible);
+    const hide = [grid, tHelper, boxHelper, edit.points, edit.wire, edit.overlay, brushCursor, ...lightHelpers()].filter(Boolean), vis = hide.map(h => h.visible);
     hide.forEach(h => h.visible = false);
     renderer.render(scene, camera);
     const src = renderer.domElement, c = document.createElement('canvas'); c.width = 320; c.height = 200;
@@ -1541,13 +1667,13 @@ function exportJson() {
 function exportGlb() {
   if (state.mode === 'edit') exitEdit();
   const prev = state.shading; setShading('material');
-  const meshes = state.objects.filter(o => o.mesh.visible).map(o => o.mesh);
+  const meshes = state.objects.filter(o => o.mesh.visible && o.prim !== 'light').map(o => o.mesh);
   boxHelper.visible = false; transform.detach();
   new GLTFExporter().parse(meshes, res => { download(new Blob([res], { type: 'model/gltf-binary' }), fileBase() + '.glb'); setShading(prev); selectObject(state.selected); },
     err => { toast('Não deu para gerar o GLB: ' + (err?.message || err)); setShading(prev); selectObject(state.selected); }, { binary: true });
 }
 function exportPng() {
-  const hide = [grid, tHelper, boxHelper, edit.points].filter(Boolean), vis = hide.map(h => h.visible);
+  const hide = [grid, tHelper, boxHelper, edit.points, ...lightHelpers()].filter(Boolean), vis = hide.map(h => h.visible);
   hide.forEach(h => h.visible = false); renderer.render(scene, camera);
   renderer.domElement.toBlob(b => download(b, fileBase() + '.png'), 'image/png');
   hide.forEach((h, i) => h.visible = vis[i]);
@@ -1638,6 +1764,7 @@ function renderObjectTab(box) {
     field('Posição (m)', vec3('p', m.position.toArray(), (i, v) => { m.position.setComponent(i, v); boxHelper.update(); })),
     field('Rotação (°)', vec3('r', [m.rotation.x * DEG, m.rotation.y * DEG, m.rotation.z * DEG], (i, v) => { m.rotation[['x', 'y', 'z'][i]] = v * RAD; boxHelper.update(); })),
     field('Escala', vec3('s', m.scale.toArray(), (i, v) => { m.scale.setComponent(i, v); boxHelper.update(); }))));
+  if (o.prim === 'light') { renderLightProps(box, o); return; }
   const geo = m.geometry, tris = geo.index ? geo.index.count / 3 : geo.attributes.position.count / 3;
   const g = el('div', { class: 'grp' }, el('h4', {}, 'Geometria'));
   if (o.prim !== 'custom') {
@@ -1656,7 +1783,7 @@ function renderObjectTab(box) {
 
   // Juntar objetos: marca os outros (os mais próximos primeiro) e eles viram parte deste
   const jg = el('div', { class: 'grp' }, el('h4', {}, 'Juntar objetos'));
-  const others = state.objects.filter(x => x !== o && x.mesh.visible).map(x => ({ x, gap: boxGap(o.mesh, x.mesh) })).sort((a, b) => a.gap - b.gap);
+  const others = state.objects.filter(x => x !== o && x.mesh.visible && x.prim !== 'light').map(x => ({ x, gap: boxGap(o.mesh, x.mesh) })).sort((a, b) => a.gap - b.gap);
   if (!join.open) {
     jg.append(el('p', { class: 'note' }, 'Transforma outros objetos e este num objeto só, soldando os vértices que estiverem encostados.'),
       el('div', { class: 'btns' }, el('button', { class: 'btn', disabled: !others.length, onclick: () => { join.open = true; join.pick = new Set(); renderPanel(); } }, 'Escolher objetos para juntar…')));
@@ -1676,6 +1803,27 @@ function renderObjectTab(box) {
         el('button', { class: 'btn', onclick: () => { join.open = false; renderPanel(); } }, 'Cancelar')));
   }
   box.append(jg);
+}
+function renderLightProps(box, o) {
+  const L = o.light, def = LIGHTS[L.type];
+  const up = (k, v, rerender) => { L[k] = v; updateLight(o); if (rerender) { commit(); renderPanel(); renderOutliner(); } };
+  const range = { sun: [0, 10, 0.05], spot: [0, 300, 1], point: [0, 150, 0.5], area: [0, 40, 0.2] }[L.type];
+  const g = el('div', { class: 'grp' }, el('h4', {}, 'Luz · ' + def.label),
+    field('Cor', el('input', { type: 'color', id: 'f-lcol', value: L.color, oninput: e => up('color', e.target.value), onchange: () => { commit(); renderOutliner(); } })),
+    el('div', { class: 'btns' }, [[1900, 'Vela'], [2700, 'Lâmpada'], [4000, 'Neutra'], [5600, 'Dia'], [7500, 'Nublado']].map(([k, n]) =>
+      el('button', { class: 'btn', title: `${k} K`, onclick: () => up('color', kelvin(k), true) }, n))),
+    field('Intensidade', slider('f-lint', L.intensity, range[0], range[1], range[2], v => up('intensity', v))));
+  if (L.type === 'spot') g.append(
+    field('Abertura', slider('f-lang', L.angle, 3, 85, 1, v => up('angle', v), v => Math.round(v) + '°')),
+    field('Borda suave', slider('f-lpen', L.penumbra, 0, 1, 0.01, v => up('penumbra', v))));
+  if (L.type === 'spot' || L.type === 'point') g.append(field('Alcance', slider('f-ldist', L.distance, 0, 30, 0.5, v => up('distance', v), v => v ? v.toFixed(1) + ' m' : 'infinito')));
+  if (L.type === 'area') g.append(
+    field('Largura', slider('f-lw', L.w, 0.1, 6, 0.05, v => up('w', v), v => v.toFixed(2) + ' m')),
+    field('Altura', slider('f-lh', L.h, 0.1, 6, 0.05, v => up('h', v), v => v.toFixed(2) + ' m')));
+  g.append(L.type === 'area' ? el('p', { class: 'note' }, 'Luz de área ilumina macio, como um softbox de estúdio, mas não projeta sombra.') : check('f-lsh', 'Projeta sombra', L.shadow, v => up('shadow', v, true)));
+  g.append(el('p', { class: 'note' }, L.type === 'point' ? 'A lâmpada ilumina para todos os lados a partir de onde está.' : 'Gire a luz (R) para mudar para onde ela aponta, ou mire no centro da vista.'));
+  if (L.type !== 'point') g.append(el('div', { class: 'btns' }, el('button', { class: 'btn', onclick: () => { aimAt(o.mesh, orbit.target); boxHelper.update(); updateTransformFields(); commit(); } }, 'Mirar no centro da vista')));
+  box.append(g);
 }
 function updateTransformFields() {
   const o = state.selected; if (!o || state.tab !== 'obj' || state.mode !== 'object') return;
@@ -1733,6 +1881,7 @@ let editingMatId = null;
 function swatchStyle(m) { const t = m.map && state.textures[m.map]; return t ? `background-image:url(${t.src});background-color:${m.color}` : `background:${m.color}`; }
 function renderMaterialTab(box) {
   const o = state.selected, cur = currentMat();
+  if (o && o.prim === 'light') { box.append(el('p', { class: 'empty' }, 'Luzes não usam material. A cor e a força ficam na aba Objeto.')); return; }
   const chips = el('div', { class: 'chips' }, state.materials.map(m => el('button', { class: 'chip' + (cur && m.id === cur.id ? ' on' : ''), title: o ? `Aplicar “${m.name}” em ${o.name}` : m.name,
     onclick: () => { if (o) { o.matId = m.id; applyShading(o); commit(); } editingMatId = m.id; renderPanel(); renderOutliner(); } },
     el('div', { class: 'sw', style: swatchStyle(m) }), el('span', {}, m.name))),
@@ -1781,26 +1930,48 @@ function renderMaterialTab(box) {
       el('span', { class: 'ax', 'data-a': 'V' }, numIn(cur.repeat[1], 0.5, v => { cur.repeat[1] = Math.max(0.01, v); getMat(cur); }, () => commit(), 'f-rv')))),
     el('p', { class: 'note' }, 'Dica: use a mesma imagem em Cor e Relevo para dar volume a tijolos, pedras e tecidos.')));
 }
+// predefinições de hora do dia: posição e cor do sol, céu, chão, fundo e exposição
+const HORAS = {
+  manha: { label: 'Manhã', sunElev: 18, sunAzim: 100, sunColor: '#ffd6a0', sun: 2.4, sky: '#a3cdf0', ground: '#5a4a3a', hemi: 0.4, background: '#a8cdea', exposure: 1, env: 0.8 },
+  meiodia: { label: 'Meio-dia', sunElev: 70, sunAzim: 30, sunColor: '#fff6e8', sun: 3.4, sky: '#79b8ef', ground: '#4b4a40', hemi: 0.5, background: '#79c2ee', exposure: 0.95, env: 0.9 },
+  tarde: { label: 'Pôr do sol', sunElev: 6, sunAzim: 250, sunColor: '#ff8c4a', sun: 2.6, sky: '#f2a072', ground: '#3a2a30', hemi: 0.35, background: '#e9946a', exposure: 1.05, env: 0.6 },
+  noite: { label: 'Noite', sunElev: 38, sunAzim: 300, sunColor: '#9fb6ff', sun: 0.35, sky: '#1a2440', ground: '#0a0c12', hemi: 0.22, background: '#0d1426', exposure: 1.1, env: 0.1 },
+};
 function renderSceneTab(box) {
   const s = state.sceneSettings, up = (k, v) => { s[k] = v; applyScene(); };
-  box.append(el('div', { class: 'grp' }, el('h4', {}, 'Ambiente'),
-    field('Fundo', el('input', { type: 'color', id: 'f-bg', value: s.background, oninput: e => up('background', e.target.value), onchange: () => commit() })),
-    field('Luz ambiente', slider('f-env', s.env, 0, 3, 0.05, v => up('env', v))),
-    field('Sol', slider('f-sun', s.sun, 0, 8, 0.1, v => up('sun', v))),
+  const color = (id, k, label) => field(label, el('input', { type: 'color', id, value: s[k], oninput: e => up(k, e.target.value), onchange: () => commit() }));
+  box.append(el('div', { class: 'grp' }, el('h4', {}, 'Hora do dia'),
+    el('div', { class: 'btns' }, Object.values(HORAS).map(h => el('button', { class: 'btn', onclick: () => { const { label, ...v } = h; Object.assign(s, v); applyScene(); commit(); renderPanel(); } }, h.label))),
+    el('p', { class: 'note' }, 'Ajusta sol, céu, fundo e exposição de uma vez. Depois dá para mexer em cada um abaixo.')));
+  box.append(el('div', { class: 'grp' }, el('h4', {}, 'Sol'),
+    color('f-suncol', 'sunColor', 'Cor'),
+    field('Força', slider('f-sun', s.sun, 0, 8, 0.05, v => up('sun', v))),
+    field('Altura', slider('f-selev', s.sunElev, 1, 90, 1, v => up('sunElev', v), v => Math.round(v) + '°')),
+    field('Direção', slider('f-sazim', s.sunAzim, 0, 360, 1, v => up('sunAzim', v), v => Math.round(v) + '°')),
+    check('f-shadow', 'Sombras do sol', s.shadows, v => { up('shadows', v); commit(); })));
+  box.append(el('div', { class: 'grp' }, el('h4', {}, 'Céu e reflexos'),
+    color('f-sky', 'sky', 'Cor do céu'),
+    color('f-ground', 'ground', 'Cor do chão'),
+    field('Luz do céu', slider('f-hemi', s.hemi, 0, 2, 0.05, v => up('hemi', v))),
+    field('Reflexos', el('select', { class: 'sel', id: 'f-envmode', onchange: e => { s.envMode = e.target.value; applyScene(); commit(); } },
+      [['estudio', 'Estúdio (luzes de sala)'], ['ceu', 'Céu e sol desta cena'], ['nenhum', 'Nenhum']].map(([v, t]) => { const op = el('option', { value: v }, t); if (s.envMode === v) op.selected = true; return op; }))),
+    field('Força do reflexo', slider('f-env', s.env, 0, 3, 0.05, v => up('env', v))),
+    el('p', { class: 'note' }, 'Com "Céu e sol", metal e vidro refletem o céu e o brilho do sol na direção certa. Para mais luzes (spot, lâmpada, softbox), use o + da barra lateral.')));
+  box.append(el('div', { class: 'grp' }, el('h4', {}, 'Cena'),
+    color('f-bg', 'background', 'Fundo'),
     field('Exposição', slider('f-exp', s.exposure, 0.2, 2.5, 0.05, v => up('exposure', v))),
-    check('f-shadow', 'Sombras do sol', s.shadows, v => { up('shadows', v); commit(); }),
     check('f-grid', 'Grade do chão (1 m)', s.grid, v => { up('grid', v); commit(); })));
   box.append(el('div', { class: 'grp' }, el('h4', {}, 'Atalhos'),
     el('p', { class: 'note', style: 'line-height:1.7;font-family:var(--f-mono);font-size:11px' },
       'G mover · R girar · S escalar · Tab edição', el('br'), 'Shift+A adicionar · Shift+D duplicar · X excluir', el('br'),
-      'F enquadrar · 1/3/7/5 vistas · Ctrl+Z / Ctrl+Shift+Z', el('br'), 'Edição: A tudo · B caixa · O proporcional · Esc limpa')));
+      'F enquadrar · H câmera padrão · 1/3/7/5 vistas', el('br'), 'Edição: A tudo · B caixa · O proporcional · Esc limpa')));
 }
 
 function renderOutliner() {
   const ul = $('#outliner'); ul.replaceChildren();
   $('#objCount').textContent = state.objects.length;
   for (const o of state.objects) {
-    const m = matById(o.matId);
+    const m = o.prim === 'light' ? null : matById(o.matId);
     const eye = el('button', { class: 'eye' + (o.mesh.visible ? '' : ' off'), title: o.mesh.visible ? 'Ocultar' : 'Mostrar', onclick: e => { e.stopPropagation(); o.mesh.visible = !o.mesh.visible; if (!o.mesh.visible && state.selected === o) selectObject(null); commit(); } });
     eye.innerHTML = '<svg viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
     const nm = el('span', { class: 'nm' }, o.name);
@@ -1810,15 +1981,17 @@ function renderOutliner() {
           onblur: () => { const v = inp.value.trim(); if (v && v !== o.name) { o.name = v; commit(); } renderOutliner(); renderPanel(); } });
         nm.replaceWith(inp); inp.focus(); inp.select();
       } },
-      el('span', { class: 'dot', style: m ? swatchStyle(m) : '' }), nm, el('span', { class: 'ty' }, o.prim === 'custom' ? 'malha' : PRIMS[o.prim].label.toLowerCase()), eye);
+      el('span', { class: 'dot', style: o.prim === 'light' ? `background:${o.light.color};border-radius:50%` : m ? swatchStyle(m) : '' }), nm,
+      el('span', { class: 'ty' }, o.prim === 'light' ? 'luz · ' + LIGHTS[o.light.type].short : o.prim === 'custom' ? 'malha' : PRIMS[o.prim].label.toLowerCase()), eye);
     ul.append(li);
   }
   if (!state.objects.length) ul.append(el('li', { style: 'cursor:default;color:var(--muted)' }, 'Cena vazia. Use o + para adicionar.'));
 }
 function refreshStatus() {
   let v = 0, t = 0;
-  for (const o of state.objects) { const g = o.mesh.geometry; v += g.attributes.position.count; t += (g.index ? g.index.count : g.attributes.position.count) / 3; }
-  $('#stCounts').textContent = `${state.objects.length} objetos · ${v.toLocaleString('pt-BR')} vértices · ${Math.round(t).toLocaleString('pt-BR')} triângulos`;
+  let nl = 0;
+  for (const o of state.objects) { if (o.prim === 'light') { nl++; continue; } const g = o.mesh.geometry; v += g.attributes.position.count; t += (g.index ? g.index.count : g.attributes.position.count) / 3; }
+  $('#stCounts').textContent = `${state.objects.length - nl} objetos${nl ? ` · ${nl} luz${nl > 1 ? 'es' : ''}` : ''} · ${v.toLocaleString('pt-BR')} vértices · ${Math.round(t).toLocaleString('pt-BR')} triângulos`;
   $('#stSel').textContent = state.mode === 'edit' ? `${edit.sel.size} vértice(s) selecionado(s)` : state.selected ? `Selecionado: ${state.selected.name}` : '';
   $('#stMode').textContent = { translate: 'Mover', rotate: 'Girar', scale: 'Escalar' }[state.tool] + (state.snap ? ' · ímã' : '');
   if (brush.on) $('#stSel').textContent = `Pincel: ${$('#brushModes .on')?.textContent || ''}`;
@@ -1943,7 +2116,9 @@ $('#projName').addEventListener('input', e => { if (state.meta) { state.meta.nam
 $('#projName').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });
 
 const addMenu = $('#addMenu');
-addMenu.append(...Object.entries(PRIMS).map(([k, p]) => el('button', { onclick: () => { addMenu.hidden = true; addPrimitive(k); } }, p.label)));
+addMenu.append(...Object.entries(PRIMS).map(([k, p]) => el('button', { onclick: () => { addMenu.hidden = true; addPrimitive(k); } }, p.label)),
+  el('div', { style: 'height:1px;background:var(--line);margin:4px 6px' }),
+  ...Object.entries(LIGHTS).map(([k, l]) => el('button', { onclick: () => { addMenu.hidden = true; addLight(k); } }, 'Luz: ' + l.label, el('small', {}, l.short))));
 function toggleMenu(menu, anchor) {
   const open = menu.hidden; document.querySelectorAll('.dd').forEach(d => d.hidden = true); menu.hidden = !open;
   if (open && menu === addMenu) { const r = anchor.getBoundingClientRect(), a = $('#app').getBoundingClientRect(); addMenu.style.top = (r.top - a.top) + 'px'; addMenu.style.left = (r.right - a.left + 6) + 'px'; }

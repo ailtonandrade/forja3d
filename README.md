@@ -35,7 +35,9 @@ Sem o Node, qualquer servidor estático serve (`python -m http.server 8080`), ma
 - **Modo edição** (Tab ou duplo clique no objeto): selecionar vértices por clique, face ou caixa; **edição proporcional** (puxa os vizinhos junto); Inflar, Murchar, Suavizar, Ruído, Achatar; Subdividir; **Unir vértices** próximos (com distância) ou a seleção no centro. A área que vai se mexer fica pintada de laranja, mais forte onde o movimento é total.
 - **Pincel de esculpir** (P): Puxar, Arrastar, Inflar, Suavizar e Achatar, com **tamanho**, **força**, **núcleo** (a parte do centro que empurra com força total) e **queda** (suave, linear ou agulha) até a borda. A área que o pincel vai afetar aparece em azul antes de tocar. **Subdividir ao esculpir** (o Dyntopo do Blender) cria polígonos onde a superfície estica, com controle de **Detalhe**.
 - **Materiais PBR**: cor, metálico, rugosidade, opacidade, emissão; textura de cor e de relevo enviadas do computador ou geradas na hora: telhas, reboco, tábuas, pedras, grama, terra, casca de árvore, folhagem, jeans, malha, couro, cabelo, tijolos, madeira, ruído e grade UV; repetição U/V.
-- **Importar/exportar**: projeto `.json`, modelo `.glb` (import e export) e imagem `.png` do viewport.
+- **Luzes**: Sol (luz infinita), Spot, Ponto (lâmpada) e Área (softbox), adicionadas pelo **+** como objetos da cena. Cada uma tem cor (com atalhos de temperatura: vela, lâmpada, neutra, dia, nublado), intensidade e sombra; o spot tem abertura e borda suave. Gire (R) para mirar.
+- **Ambiente**: hora do dia (manhã, meio-dia, pôr do sol, noite), cor, força, altura e direção do sol, cor do céu e do chão, e reflexos de **Estúdio** ou de **Céu e sol** (metal e vidro refletem o céu e o brilho do sol da cena).
+- **Importar/exportar**: projeto `.json`, modelo `.glb` (import e export; as luzes não vão no `.glb`) e imagem `.png` do viewport.
 
 ## Atalhos
 

@@ -12,6 +12,7 @@ const entries = [
   'examples/jsm/environments/RoomEnvironment.js',
   'examples/jsm/exporters/GLTFExporter.js',
   'examples/jsm/loaders/GLTFLoader.js',
+  'examples/jsm/lights/RectAreaLightUniformsLib.js',
 ];
 const seen = new Set(), queue = [...entries];
 while (queue.length) {
