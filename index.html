@@ -74,6 +74,16 @@ button{cursor:pointer}
 #modeBadge.edit{color:var(--accent-ink);background:var(--accent);border-color:var(--accent)}
 #hint{position:absolute;left:10px;bottom:10px;right:120px;color:var(--muted);font-size:12px;text-shadow:0 1px 2px #000;pointer-events:none}
 #hint b{color:var(--fg);font-weight:500;font-family:var(--f-mono);font-size:11px;background:rgba(20,23,28,.8);border:1px solid var(--line);border-radius:3px;padding:0 4px}
+#brushBar{position:absolute;left:10px;bottom:40px;max-width:calc(100% - 20px);display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;padding:6px 10px;background:rgba(20,23,28,.88);border:1px solid var(--line);border-radius:9px;backdrop-filter:blur(6px)}
+#brushBar .seg{background:transparent;border:0;padding:0;flex-wrap:wrap}
+#brushBar label{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+#brushBar input[type=range]{width:92px;accent-color:var(--accent)}
+#brushBar output{font:11px var(--f-mono);color:var(--fg);min-width:30px;font-variant-numeric:tabular-nums}
+.qr{display:flex;flex-wrap:wrap;gap:16px;align-items:center;padding:16px}
+.qr .code{background:#fff;border-radius:8px;padding:6px;line-height:0}
+.qr .code svg{width:190px;height:190px}
+.qr .urls{display:flex;flex-direction:column;gap:6px;min-width:0;flex:1}
+.qr .urls b{font:500 16px var(--f-mono);word-break:break-all;color:var(--fg)}
 #selrect{position:absolute;border:1px dashed var(--sel);background:rgba(98,169,228,.12);pointer-events:none}
 
 /* painel */
@@ -163,6 +173,15 @@ input[type=color]{width:100%;height:26px;border:1px solid var(--line);border-rad
   .tool{width:32px;height:32px}
   #hint{display:none}
   #status .hide-sm{display:none}
+  /* no celular: só o essencial na barra de cima (importar/exportar ficam para o computador) */
+  #top .menu,#btnPhone{display:none}
+  #top{gap:4px;padding:0 6px}
+  #vpTop{gap:6px}
+  #vpTop .seg:nth-child(2){display:none}
+  .seg button{padding:5px 8px}
+  #brushBar{bottom:10px;gap:6px 10px}
+  #brushBar input[type=range]{width:74px}
+  #modeBadge{display:none}
 }
 @media (prefers-reduced-motion:reduce){ #panel{transition:none} }
 </style>
@@ -194,12 +213,14 @@ input[type=color]{width:100%;height:26px;border:1px solid var(--line);border-rad
         <button data-act="savePng">Imagem do viewport <small>.png</small></button>
       </div>
     </div>
+    <button class="tb" id="btnPhone" hidden title="Abrir esta Forja no celular ou tablet">Celular</button>
     <button class="tb mobile-only" id="btnPanel">Painel</button>
   </header>
 
   <aside id="tools" aria-label="Ferramentas">
     <button class="tool on" id="mObject" title="Modo objeto (Tab)"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg></button>
     <button class="tool" id="mEdit" title="Modo edição de vértices (Tab)"><svg viewBox="0 0 24 24"><path d="M5 18L12 5l7 13z"/><circle cx="5" cy="18" r="1.8" fill="currentColor"/><circle cx="12" cy="5" r="1.8" fill="currentColor"/><circle cx="19" cy="18" r="1.8" fill="currentColor"/></svg></button>
+    <button class="tool" id="btnBrush" title="Pincel de esculpir (P)"><svg viewBox="0 0 24 24"><path d="M15 3.5l5.5 5.5-8.2 8.2a2.5 2.5 0 0 1-1.8.7H7v-3.4c0-.7.3-1.3.7-1.8z"/><path d="M12.5 6l5.5 5.5"/><path d="M4 21c1.5 0 3-1 3-3"/></svg><kbd>P</kbd></button>
     <div class="sep"></div>
     <button class="tool on" data-tool="translate" title="Mover (G)"><svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg><kbd>G</kbd></button>
     <button class="tool" data-tool="rotate" title="Girar (R)"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v4h-4"/></svg><kbd>R</kbd></button>
@@ -226,6 +247,15 @@ input[type=color]{width:100%;height:26px;border:1px solid var(--line);border-rad
     <div id="hint"></div>
     <div id="modeBadge">Objeto</div>
     <div id="selrect" hidden></div>
+    <div id="brushBar" hidden>
+      <div class="seg" id="brushModes" role="group" aria-label="Tipo de pincel">
+        <button data-bm="draw" class="on" title="Levanta a superfície por onde passa (Ctrl afunda)">Puxar</button><button data-bm="grab" title="Agarra a área e arrasta junto com o dedo/mouse">Arrastar</button><button data-bm="inflate" title="Incha para fora, cada ponto na sua direção">Inflar</button><button data-bm="smooth" title="Alisa calombos">Suavizar</button><button data-bm="flatten" title="Achata contra o plano tocado">Achatar</button>
+      </div>
+      <label>Tamanho <input type="range" id="bSize" min="0.03" max="2.5" step="0.01"><output id="oSize"></output></label>
+      <label>Força <input type="range" id="bStr" min="0.02" max="1" step="0.01"><output id="oStr"></output></label>
+      <label title="Parte do centro que empurra com força total; o resto vai enfraquecendo até a borda">Núcleo <input type="range" id="bCore" min="0" max="0.95" step="0.01"><output id="oCore"></output></label>
+      <div class="seg"><button id="bCurve" title="Como a força cai do núcleo até a borda">Queda: suave</button><button id="bInv" title="Inverte o pincel (ou segure Ctrl)">Inverter</button></div>
+    </div>
   </main>
 
   <aside id="panel" aria-label="Propriedades">
@@ -242,6 +272,13 @@ input[type=color]{width:100%;height:26px;border:1px solid var(--line);border-rad
   </aside>
 
   <footer id="status"><span id="stCounts"></span><span id="stSel" class="hide-sm"></span><span class="r" id="stMode"></span></footer>
+</div>
+
+<div class="modal" id="phoneModal" hidden>
+  <div class="sheet" role="dialog" aria-labelledby="phoneTitle" style="width:min(560px,100%)">
+    <header><h2 id="phoneTitle">Modelar no celular</h2><button class="btn" id="phClose">Fechar</button></header>
+    <div id="phoneBody"></div>
+  </div>
 </div>
 
 <div class="modal" id="projModal" hidden>
@@ -569,7 +606,30 @@ function selectObject(o) {
 /* ================= Modo edição (vértices) ================= */
 const edit = { obj: null, groups: [], v2g: null, nb: null, sel: new Set(), points: null, wire: null, pivot: new THREE.Object3D(), startInv: new THREE.Matrix4(), orig: null, affected: [], prop: false, radius: 0.5, amount: 0.08, box: false, xray: false, modified: false };
 scene.add(edit.pivot);
-const C_PT = new THREE.Color(0x15181c), C_SEL = new THREE.Color(0xff9a52), C_INF = new THREE.Color(0xc7643a), tmpC = new THREE.Color();
+const C_PT = new THREE.Color(0x15181c), C_SEL = new THREE.Color(0xff9a52), C_INF = new THREE.Color(0xc7643a), C_BRUSH = new THREE.Color(0x5fb4ff), tmpC = new THREE.Color();
+const COARSE = matchMedia('(pointer: coarse)').matches;
+if (COARSE) transform.setSize(1.5);
+
+// Destaque: pinta por cima da malha os triângulos que vão se mexer (laranja = seleção/gizmo, azul = pincel),
+// mais forte onde o movimento é total e sumindo onde a influência acaba
+const overlayMat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, depthFunc: THREE.LessEqualDepth, side: THREE.DoubleSide });
+function buildOverlay() {
+  const m = edit.obj.mesh, src = m.geometry;
+  if (edit.overlay) { edit.overlay.parent?.remove(edit.overlay); edit.overlay.geometry.dispose(); }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', src.attributes.position); g.setIndex(src.index);
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(src.attributes.position.count * 4), 4));
+  edit.overlay = new THREE.Mesh(g, overlayMat);
+  edit.overlay.raycast = () => {}; edit.overlay.renderOrder = 4; edit.overlay.frustumCulled = false;
+  m.add(edit.overlay);
+}
+function paintOverlay(weights, color = C_SEL, alpha = 0.6) {
+  if (!edit.overlay) return;
+  const col = edit.overlay.geometry.attributes.color, a = col.array; a.fill(0);
+  for (const [g, w] of weights) for (const i of edit.groups[g].idx) { a[i * 4] = color.r; a[i * 4 + 1] = color.g; a[i * 4 + 2] = color.b; a[i * 4 + 3] = alpha * (0.25 + 0.75 * w); }
+  col.needsUpdate = true;
+}
+const paintSelection = () => paintOverlay(edit.prop && edit.affected.length ? edit.affected : [...edit.sel].map(g => [g, 1]));
 
 function buildEditData() {
   const geo = edit.obj.mesh.geometry, pos = geo.attributes.position;
@@ -596,7 +656,9 @@ function buildEditData() {
   pointsMat.depthTest = !edit.xray;
   edit.points = new THREE.Points(pg, pointsMat);
   edit.points.renderOrder = 10; edit.points.raycast = () => {};
+  edit.points.visible = !brush.on;
   edit.obj.mesh.add(edit.points);
+  buildOverlay();
   syncPoints(); paintPoints();
 }
 function syncPoints() {
@@ -613,6 +675,7 @@ function paintPoints() {
     col.setXYZ(g, c.r, c.g, c.b);
   }
   col.needsUpdate = true;
+  paintSelection();
 }
 function enterEdit() {
   const o = state.selected; if (!o) { toast('Selecione um objeto antes de entrar no modo edição.'); return; }
@@ -630,6 +693,8 @@ function exitEdit() {
   const m = edit.obj.mesh;
   if (edit.points) { m.remove(edit.points); edit.points.geometry.dispose(); edit.points = null; }
   if (edit.wire) { m.remove(edit.wire); edit.wire.material.dispose(); edit.wire = null; }
+  if (edit.overlay) { m.remove(edit.overlay); edit.overlay.geometry.dispose(); edit.overlay = null; }
+  if (brush.on) setBrush(false, true);
   transform.detach(); state.mode = 'object'; edit.obj = null; edit.sel.clear(); edit.box = false;
   if (state.selected) { transform.attach(state.selected.mesh); boxHelper.setFromObject(state.selected.mesh); boxHelper.visible = true; }
   updateModeUI(); renderPanel(); refreshStatus();
@@ -641,7 +706,7 @@ function selectionChanged() {
   paintPoints(); placePivot(); renderPanel(); refreshStatus();
 }
 function placePivot() {
-  if (!edit.sel.size) { transform.detach(); return; }
+  if (!edit.sel.size || brush.on) { transform.detach(); return; }
   const c = new THREE.Vector3();
   edit.sel.forEach(g => c.add(edit.groups[g].p)); c.divideScalar(edit.sel.size).applyMatrix4(edit.obj.mesh.matrixWorld);
   edit.pivot.position.copy(c); edit.pivot.rotation.set(0, 0, 0); edit.pivot.scale.set(1, 1, 1); edit.pivot.updateMatrixWorld();
@@ -728,6 +793,134 @@ function subdivide() {
   toast(`Malha subdividida: ${out.length / 3} triângulos.`);
 }
 
+/* ================= Pincel de esculpir ================= */
+// Força total dentro do núcleo; do núcleo até a borda ela cai seguindo a curva escolhida.
+const brush = { on: false, mode: 'draw', radius: 0.35, strength: 0.45, hardness: 0.3, curve: 'smooth', invert: false, stroke: null };
+const CURVES = { smooth: 'suave', linear: 'linear', sharp: 'agulha' };
+const ringGeo = new THREE.RingGeometry(0.965, 1, 72);
+const ringMat = o => new THREE.MeshBasicMaterial({ color: o, transparent: true, opacity: 0.95, depthTest: false, side: THREE.DoubleSide });
+const brushCursor = new THREE.Group(), ringOuter = new THREE.Mesh(ringGeo, ringMat(0xffffff)), ringCore = new THREE.Mesh(ringGeo, ringMat(0x5fb4ff));
+[ringOuter, ringCore].forEach(r => { r.renderOrder = 20; r.raycast = () => {}; });
+brushCursor.add(ringOuter, ringCore); brushCursor.visible = false; scene.add(brushCursor);
+const _w = new THREE.Vector3(), _n = new THREE.Vector3(), Z = new THREE.Vector3(0, 0, 1);
+
+function brushFalloff(t) {
+  if (t >= 1) return 0;
+  const h = brush.hardness; if (t <= h) return 1;
+  const u = (t - h) / (1 - h);
+  return brush.curve === 'linear' ? 1 - u : brush.curve === 'sharp' ? (1 - u) ** 3 : 1 - u * u * (3 - 2 * u);
+}
+function brushWeights(pWorld) {
+  const mw = edit.obj.mesh.matrixWorld, r = brush.radius, res = [];
+  for (let g = 0; g < edit.groups.length; g++) {
+    const d = _w.copy(edit.groups[g].p).applyMatrix4(mw).distanceTo(pWorld);
+    if (d < r) { const w = brushFalloff(d / r); if (w > 0) res.push([g, w]); }
+  }
+  return res;
+}
+function brushHit(e) {
+  const p = ndc(e);
+  ray.setFromCamera(new THREE.Vector2(p.x / p.w * 2 - 1, -(p.y / p.h) * 2 + 1), camera);
+  return ray.intersectObject(edit.obj.mesh, false)[0] || null;
+}
+function placeCursor(hit) {
+  brushCursor.position.copy(hit.point);
+  _n.copy(hit.face.normal).transformDirection(edit.obj.mesh.matrixWorld);
+  brushCursor.quaternion.setFromUnitVectors(Z, _n);
+  brushCursor.scale.setScalar(brush.radius);
+  ringCore.scale.setScalar(Math.max(0.03, brush.hardness)); ringCore.visible = brush.hardness > 0.02;
+  brushCursor.visible = true;
+}
+function setBrush(on, silent) {
+  if (on && state.mode !== 'edit') { if (!state.selected) { toast('Selecione um objeto para esculpir.'); return; } enterEdit(); }
+  brush.on = on; brush.stroke = null; brushCursor.visible = false;
+  if (edit.points) edit.points.visible = !on;
+  $('#btnBrush').classList.toggle('on', on); $('#brushBar').hidden = !on;
+  if (state.mode === 'edit') { placePivot(); paintSelection(); }
+  if (!silent) { renderPanel(); refreshStatus(); if (on) toast(COARSE ? 'Um dedo na peça esculpe; fora dela gira a câmera; dois dedos aproximam.' : 'Arraste sobre a peça para esculpir; fora dela gira a câmera. Ctrl inverte, [ e ] mudam o tamanho.'); }
+}
+function syncBrushBar() {
+  const set = (id, v, out, fmt) => { $(id).value = v; $(out).textContent = fmt(v); };
+  set('#bSize', brush.radius, '#oSize', v => (+v).toFixed(2) + ' m');
+  set('#bStr', brush.strength, '#oStr', v => Math.round(v * 100) + '%');
+  set('#bCore', brush.hardness, '#oCore', v => Math.round(v * 100) + '%');
+  $('#bCurve').textContent = 'Queda: ' + CURVES[brush.curve];
+  $('#bInv').classList.toggle('hot', brush.invert);
+  document.querySelectorAll('#brushModes button').forEach(b => b.classList.toggle('on', b.dataset.bm === brush.mode));
+}
+function startStroke(hit, e) {
+  const mesh = edit.obj.mesh;
+  mesh.updateMatrixWorld();
+  const st = brush.stroke = { normal: hit.face.normal.clone(), last: { x: e.clientX, y: e.clientY }, inv: mesh.matrixWorld.clone().invert() };
+  if (brush.mode === 'grab') {
+    st.weights = brushWeights(hit.point);
+    st.origW = st.weights.map(([g]) => edit.groups[g].p.clone().applyMatrix4(mesh.matrixWorld));
+    st.plane = new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()).negate(), hit.point);
+    st.start = hit.point.clone();
+    paintOverlay(st.weights, C_BRUSH, 0.5);
+  } else applyDab(hit, e);
+  placeCursor(hit);
+}
+function applyDab(hit, e) {
+  const st = brush.stroke, mesh = edit.obj.mesh;
+  const sc = (Math.abs(mesh.scale.x) + Math.abs(mesh.scale.y) + Math.abs(mesh.scale.z)) / 3 || 1;
+  const sign = brush.invert !== !!(e.ctrlKey || e.metaKey) ? -1 : 1;
+  const wts = brushWeights(hit.point), step = brush.strength * brush.radius * 0.1 / sc;
+  st.normal.lerp(hit.face.normal, 0.3).normalize();
+  const n = st.normal;
+  if (brush.mode === 'draw') for (const [g, w] of wts) setGroup(g, _w.copy(edit.groups[g].p).addScaledVector(n, step * w * sign));
+  else if (brush.mode === 'inflate') for (const [g, w] of wts) setGroup(g, _w.copy(edit.groups[g].p).addScaledVector(groupNormal(g), step * w * sign));
+  else if (brush.mode === 'smooth') {
+    const next = wts.map(([g, w]) => { const avg = new THREE.Vector3(), nb = edit.nb[g]; nb.forEach(k => avg.add(edit.groups[k].p)); if (nb.size) avg.divideScalar(nb.size); else avg.copy(edit.groups[g].p); return [g, edit.groups[g].p.clone().lerp(avg, Math.min(1, brush.strength * w))]; });
+    next.forEach(([g, v]) => setGroup(g, v));
+  } else if (brush.mode === 'flatten') {
+    const c = hit.point.clone().applyMatrix4(st.inv);
+    for (const [g, w] of wts) { const p = _w.copy(edit.groups[g].p); setGroup(g, p.addScaledVector(n, -p.clone().sub(c).dot(n) * Math.min(1, brush.strength * w * 0.6))); }
+  }
+  finishGeo(); paintOverlay(wts, C_BRUSH, 0.45);
+}
+function moveStroke(e) {
+  const st = brush.stroke;
+  if (brush.mode === 'grab') {
+    const p = ndc(e);
+    ray.setFromCamera(new THREE.Vector2(p.x / p.w * 2 - 1, -(p.y / p.h) * 2 + 1), camera);
+    const cur = ray.ray.intersectPlane(st.plane, new THREE.Vector3()); if (!cur) return;
+    const delta = cur.sub(st.start);
+    st.weights.forEach(([g, w], i) => setGroup(g, _w.copy(st.origW[i]).addScaledVector(delta, w).applyMatrix4(st.inv)));
+    finishGeo();
+    brushCursor.position.copy(st.start).add(delta);
+    return;
+  }
+  if (Math.hypot(e.clientX - st.last.x, e.clientY - st.last.y) < 3) return;
+  st.last = { x: e.clientX, y: e.clientY };
+  const hit = brushHit(e); if (!hit) return;
+  applyDab(hit, e); placeCursor(hit);
+}
+function endStroke() {
+  if (!brush.stroke) return;
+  brush.stroke = null; markModified(); commit();
+  if (COARSE) brushCursor.visible = false;
+  paintSelection();
+}
+// Escuta na fase de captura do viewport: começando em cima da peça, o pincel fica com o gesto e a câmera nem fica sabendo
+viewport.addEventListener('pointerdown', e => {
+  if (!brush.on || state.mode !== 'edit' || !e.isPrimary || e.button !== 0) return;
+  const hit = brushHit(e); if (!hit) return;
+  e.stopPropagation();
+  renderer.domElement.setPointerCapture(e.pointerId);
+  startStroke(hit, e);
+}, true);
+viewport.addEventListener('pointermove', e => {
+  if (!brush.on || state.mode !== 'edit') return;
+  if (brush.stroke) { e.stopPropagation(); moveStroke(e); return; }
+  if (e.pointerType !== 'mouse' || e.buttons) return;
+  const hit = brushHit(e);
+  if (hit) { placeCursor(hit); paintOverlay(brushWeights(hit.point), C_BRUSH, 0.3); }
+  else if (brushCursor.visible) { brushCursor.visible = false; paintSelection(); }
+}, true);
+['pointerup', 'pointercancel'].forEach(t => viewport.addEventListener(t, e => { if (brush.stroke) { e.stopPropagation(); endStroke(); } }, true));
+viewport.addEventListener('pointerleave', () => { if (brush.on && !brush.stroke) { brushCursor.visible = false; if (state.mode === 'edit') paintSelection(); } });
+
 /* ================= Gizmo ================= */
 let dragging = false, dragChanged = false;
 transform.addEventListener('dragging-changed', e => {
@@ -796,10 +989,10 @@ renderer.domElement.addEventListener('pointerup', e => {
     }
     selectionChanged(); renderPanel(); return;
   }
-  if (d.btn !== 0 || moved > 4 || d.onGizmo || dragging) return;
+  if (d.btn !== 0 || moved > (e.pointerType === 'touch' ? 10 : 4) || d.onGizmo || dragging || brush.on) return;
   ray.setFromCamera(new THREE.Vector2(p.x / p.w * 2 - 1, -(p.y / p.h) * 2 + 1), camera);
   if (state.mode === 'edit') {
-    let best = -1, bestD = 11;
+    let best = -1, bestD = e.pointerType === 'touch' ? 26 : 11;
     for (let g = 0; g < edit.groups.length; g++) {
       const v = project(g); if (v.z > 1) continue;
       const dd = Math.hypot((v.x + 1) / 2 * p.w - p.x, (1 - v.y) / 2 * p.h - p.y);
@@ -882,11 +1075,18 @@ function applyScene() {
   for (const m of matCache.values()) m.envMapIntensity = s.env;
 }
 
-/* ================= Projetos (IndexedDB) ================= */
+/* ================= Projetos (servidor Node do PC ou IndexedDB) ================= */
+// Aberta pelo serve.js (app instalado, ou celular na rede), os projetos ficam em arquivos no computador e o PC e o
+// celular veem os mesmos. Em qualquer outro lugar (artifact, servidor estático) ficam no IndexedDB deste navegador.
 const memStore = new Map();
 const DB = {
-  db: null,
+  db: null, server: null,
+  get where() { return this.server ? 'no computador' : this.db ? 'no navegador' : 'só nesta aba'; },
   async open() {
+    try {
+      const r = await fetch('api/info', { cache: 'no-store' });
+      if (r.ok && (r.headers.get('content-type') || '').includes('json')) { this.server = await r.json(); return; }
+    } catch (e) {}
     try {
       this.db = await new Promise((res, rej) => {
         const r = indexedDB.open('forja3d', 1);
@@ -896,10 +1096,18 @@ const DB = {
     } catch (e) { this.db = null; }
   },
   run(mode, fn) { return new Promise((res, rej) => { const tx = this.db.transaction('projects', mode); const r = fn(tx.objectStore('projects')); tx.oncomplete = () => res(r && r.result); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error); }); },
-  async all() { return this.db ? this.run('readonly', s => s.getAll()) : [...memStore.values()]; },
-  async get(id) { return this.db ? this.run('readonly', s => s.get(id)) : memStore.get(id); },
-  async put(p) { if (this.db) return this.run('readwrite', s => s.put(p)); memStore.set(p.id, structuredClone(p)); },
-  async del(id) { if (this.db) return this.run('readwrite', s => s.delete(id)); memStore.delete(id); },
+  async api(path, opt = {}) {
+    const r = await fetch('api/' + path, { cache: 'no-store', ...opt });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).erro || 'erro ' + r.status);
+    return r.json();
+  },
+  async all() { if (this.server) return this.api('projetos'); return this.db ? this.run('readonly', s => s.getAll()) : [...memStore.values()]; },
+  async get(id) { if (this.server) return this.api('projetos/' + id).catch(() => null); return this.db ? this.run('readonly', s => s.get(id)) : memStore.get(id); },
+  async put(p) {
+    if (this.server) return this.api('projetos/' + p.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) });
+    if (this.db) return this.run('readwrite', s => s.put(p)); memStore.set(p.id, structuredClone(p));
+  },
+  async del(id) { if (this.server) return this.api('projetos/' + id, { method: 'DELETE' }); if (this.db) return this.run('readwrite', s => s.delete(id)); memStore.delete(id); },
 };
 const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
@@ -909,7 +1117,7 @@ function setSaveState(t) { $('#saveState').textContent = t; }
 function scheduleSave() { setSaveState('Alterações não salvas'); clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 900); }
 function captureThumb() {
   try {
-    const hide = [grid, tHelper, boxHelper, edit.points, edit.wire].filter(Boolean), vis = hide.map(h => h.visible);
+    const hide = [grid, tHelper, boxHelper, edit.points, edit.wire, edit.overlay, brushCursor].filter(Boolean), vis = hide.map(h => h.visible);
     hide.forEach(h => h.visible = false);
     renderer.render(scene, camera);
     const src = renderer.domElement, c = document.createElement('canvas'); c.width = 320; c.height = 200;
@@ -926,8 +1134,8 @@ async function saveNow() {
   try {
     await DB.put(data);
     const t = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-    setSaveState((DB.db ? 'Salvo no navegador às ' : 'Salvo só nesta aba às ') + t);
-  } catch (e) { setSaveState('Não foi salvo'); toast('Não deu para salvar no navegador (' + (e && e.name || 'erro') + '). Exporte o projeto em .json para não perder.'); }
+    setSaveState(`Salvo ${DB.where} às ${t}`);
+  } catch (e) { setSaveState('Não foi salvo'); toast(`Não deu para salvar ${DB.where} (${e && (e.message || e.name) || 'erro'}). Exporte o projeto em .json para não perder.`); }
 }
 async function openProject(data) {
   if (state.meta) await saveNow();
@@ -984,23 +1192,23 @@ function closeProjects() { $('#projModal').hidden = true; }
 async function renderProjects() {
   const list = (await DB.all()).sort((a, b) => (b.updated || 0) - (a.updated || 0)), box = $('#plist');
   box.replaceChildren();
-  if (!DB.db) box.append(el('p', { class: 'note', style: 'grid-column:1/-1' }, 'O navegador bloqueou o armazenamento local: os projetos ficam só nesta aba. Use Exportar › Projeto Forja para guardar uma cópia.'));
+  if (!DB.db && !DB.server) box.append(el('p', { class: 'note', style: 'grid-column:1/-1' }, 'O navegador bloqueou o armazenamento local: os projetos ficam só nesta aba. Use Exportar › Projeto Forja para guardar uma cópia.'));
   for (const p of list) {
     const cur = state.meta && p.id === state.meta.id;
     let confirming = false;
     const delBtn = el('button', { class: 'btn dng', onclick: async () => {
       if (!confirming) { confirming = true; delBtn.textContent = 'Confirmar exclusão'; return; }
       await DB.del(p.id);
-      if (cur) { const rest = (await DB.all()).sort((a, b) => (b.updated || 0) - (a.updated || 0)); state.meta = null; await openProject(rest[0] || blankProject()); if (!rest[0]) await saveNow(); }
+      if (cur) { const rest = (await DB.all()).sort((a, b) => (b.updated || 0) - (a.updated || 0)); state.meta = null; const next = rest[0] && await DB.get(rest[0].id); await openProject(next || blankProject()); if (!next) await saveNow(); }
       renderProjects();
     } }, 'Excluir');
-    const objs = (p.objects || []).length;
+    const objs = p.count ?? (p.objects || []).length;
     box.append(el('div', { class: 'pcard' + (cur ? ' cur' : '') },
       el('div', { class: 'th', style: p.thumb ? `background-image:url(${p.thumb})` : '', onclick: () => open(p) }, p.thumb ? '' : 'sem prévia'),
       el('div', { class: 'meta' }, el('b', {}, p.name), el('small', {}, `${objs} objeto${objs === 1 ? '' : 's'} · ${p.updated ? new Date(p.updated).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : 'nunca salvo'}`)),
       el('div', { class: 'act' },
         el('button', { class: 'btn', onclick: () => open(p) }, cur ? 'Aberto' : 'Abrir'),
-        el('button', { class: 'btn', onclick: async () => { const c = structuredClone(p); c.id = uid(); c.name = p.name + ' (cópia)'; c.created = c.updated = Date.now(); await DB.put(c); renderProjects(); } }, 'Duplicar'),
+        el('button', { class: 'btn', onclick: async () => { const c = structuredClone(await DB.get(p.id)); c.id = uid(); c.name = p.name + ' (cópia)'; c.created = c.updated = Date.now(); await DB.put(c); renderProjects(); } }, 'Duplicar'),
         delBtn)));
   }
   async function open(p) { closeProjects(); if (!(state.meta && state.meta.id === p.id)) await openProject(await DB.get(p.id)); }
@@ -1150,6 +1358,10 @@ function renderEditTab(box) {
       el('button', { class: 'btn', onclick: () => { edit.sel.clear(); selectionChanged(); } }, 'Limpar')),
     check('f-xray', 'Raio-X: ver e pegar vértices de trás', edit.xray, v => { edit.xray = v; pointsMat.depthTest = !v; pointsMat.needsUpdate = true; })));
   box.append(el('div', { class: 'grp' },
+    el('h4', {}, 'Pincel'),
+    el('p', { class: 'note' }, brush.on ? 'Pincel ligado: os ajustes ficam na barra embaixo do viewport. A área azul mostra o que vai se mexer.' : 'Esculpa passando o pincel na peça, com força maior no centro e menor na borda.'),
+    el('div', { class: 'btns' }, el('button', { class: 'btn' + (brush.on ? ' on' : ' pri'), onclick: () => setBrush(!brush.on) }, brush.on ? 'Desligar pincel (P)' : 'Ligar pincel (P)'))));
+  box.append(el('div', { class: 'grp' },
     el('h4', {}, 'Edição proporcional'),
     check('f-prop', 'Arrastar puxa os vizinhos junto (O)', edit.prop, v => { edit.prop = v; selectionChanged(); }),
     field('Alcance (m)', slider('f-rad', edit.radius, 0.05, 5, 0.05, v => { edit.radius = v; if (edit.prop) { edit.affected = computeAffected(); paintPoints(); } }, undefined, true))));
@@ -1265,7 +1477,10 @@ function refreshStatus() {
   $('#stCounts').textContent = `${state.objects.length} objetos · ${v.toLocaleString('pt-BR')} vértices · ${Math.round(t).toLocaleString('pt-BR')} triângulos`;
   $('#stSel').textContent = state.mode === 'edit' ? `${edit.sel.size} vértice(s) selecionado(s)` : state.selected ? `Selecionado: ${state.selected.name}` : '';
   $('#stMode').textContent = { translate: 'Mover', rotate: 'Girar', scale: 'Escalar' }[state.tool] + (state.snap ? ' · ímã' : '');
-  $('#hint').innerHTML = state.mode === 'edit'
+  if (brush.on) $('#stSel').textContent = `Pincel: ${$('#brushModes .on')?.textContent || ''}`;
+  $('#hint').innerHTML = brush.on
+    ? 'Arraste na peça para esculpir · fora dela gira a câmera · <b>Ctrl</b> inverte · <b>[</b> <b>]</b> tamanho · <b>P</b> desliga'
+    : state.mode === 'edit'
     ? (edit.box ? 'Arraste para desenhar a caixa de seleção · <b>Shift</b> soma à seleção' : 'Clique nos pontos · <b>Shift</b> soma · <b>B</b> caixa · <b>A</b> tudo · <b>O</b> proporcional · <b>Tab</b> conclui')
     : 'Clique seleciona · arraste gira a câmera · botão direito arrasta · roda aproxima · <b>G</b> <b>R</b> <b>S</b> · duplo clique edita';
 }
@@ -1301,6 +1516,50 @@ $('#projModal').addEventListener('click', e => { if (e.target.id === 'projModal'
 $('#pNewBlank').onclick = () => newProject(false); $('#pNewExample').onclick = () => newProject(true);
 $('#pImport').onclick = () => $('#fileJson').click();
 $('#btnPanel').onclick = () => $('#panel').classList.toggle('open');
+$('#btnBrush').onclick = () => setBrush(!brush.on);
+document.querySelectorAll('#brushModes button').forEach(b => b.onclick = () => { brush.mode = b.dataset.bm; syncBrushBar(); refreshStatus(); });
+$('#bSize').oninput = e => { brush.radius = +e.target.value; syncBrushBar(); if (brushCursor.visible) brushCursor.scale.setScalar(brush.radius); };
+$('#bStr').oninput = e => { brush.strength = +e.target.value; syncBrushBar(); };
+$('#bCore').oninput = e => { brush.hardness = +e.target.value; syncBrushBar(); ringCore.scale.setScalar(Math.max(0.03, brush.hardness)); ringCore.visible = brush.hardness > 0.02; };
+$('#bCurve').onclick = () => { const k = Object.keys(CURVES); brush.curve = k[(k.indexOf(brush.curve) + 1) % k.length]; syncBrushBar(); };
+$('#bInv').onclick = () => { brush.invert = !brush.invert; syncBrushBar(); };
+syncBrushBar();
+
+/* ---- celular: libera o acesso pela rede e mostra o endereço + QR code ---- */
+let qrLib = null;
+function loadQr() {
+  return qrLib || (qrLib = new Promise((res, rej) => { const sc = el('script', { src: 'vendor/qrcode.min.js' }); sc.onload = () => res(window.qrcode); sc.onerror = rej; document.head.append(sc); }));
+}
+async function showPhone() {
+  $('#phoneModal').hidden = false;
+  const body = $('#phoneBody'); body.replaceChildren(el('p', { class: 'note', style: 'padding:16px' }, 'Consultando o servidor…'));
+  let info;
+  try { info = await DB.api('info'); } catch (e) { body.replaceChildren(el('p', { class: 'note', style: 'padding:16px' }, 'O servidor da Forja não respondeu. Feche e abra o app de novo.')); return; }
+  const toggle = async on => {
+    try { await DB.api('rede?ligar=' + (on ? 1 : 0), { method: 'POST' }); } catch (e) { toast(e.message); }
+    showPhone();
+  };
+  if (!info.rede) {
+    body.replaceChildren(el('div', { class: 'qr', style: 'flex-direction:column;align-items:stretch' },
+      el('p', { class: 'note' }, 'Libere o acesso pela rede para abrir esta mesma Forja no navegador do celular ou do tablet, conectado no mesmo Wi-Fi deste computador. Os projetos ficam salvos aqui no PC e aparecem nos dois.'),
+      el('p', { class: 'note' }, 'Se o Windows perguntar sobre o firewall, permita o acesso em redes privadas.'),
+      el('div', { class: 'btns' }, el('button', { class: 'btn pri', onclick: () => toggle(true) }, 'Liberar acesso pela rede'))));
+    return;
+  }
+  const url = info.urls[0];
+  const code = el('div', { class: 'code' });
+  body.replaceChildren(el('div', { class: 'qr' }, code,
+    el('div', { class: 'urls' },
+      el('span', { class: 'note' }, url ? 'Aponte a câmera do celular para o código ou digite no navegador dele:' : 'Este computador não está em nenhuma rede.'),
+      info.urls.map((u, i) => el('b', { style: i ? 'font-size:13px;color:var(--muted)' : '' }, u)),
+      el('span', { class: 'note' }, 'Funciona no mesmo Wi-Fi. Enquanto estiver liberado, qualquer pessoa nessa rede consegue abrir a Forja.'),
+      el('div', { class: 'btns' }, el('button', { class: 'btn dng', onclick: () => toggle(false) }, 'Desligar acesso pela rede')))));
+  if (url) loadQr().then(qr => { const q = qr(0, 'M'); q.addData(url); q.make(); code.innerHTML = q.createSvgTag(5, 8); }).catch(() => code.remove());
+  else code.remove();
+}
+$('#btnPhone').onclick = showPhone;
+$('#phClose').onclick = () => $('#phoneModal').hidden = true;
+$('#phoneModal').addEventListener('click', e => { if (e.target.id === 'phoneModal') $('#phoneModal').hidden = true; });
 $('#projName').addEventListener('input', e => { if (state.meta) { state.meta.name = e.target.value || 'Projeto sem título'; scheduleSave(); } });
 $('#projName').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });
 
@@ -1326,6 +1585,7 @@ window.addEventListener('keydown', e => {
   if (ctrl && k === 's') { e.preventDefault(); saveNow(); return; }
   if (ctrl) return;
   if (!$('#projModal').hidden) { if (k === 'escape') closeProjects(); return; }
+  if (!$('#phoneModal').hidden) { if (k === 'escape') $('#phoneModal').hidden = true; return; }
   if (k === 'tab') { e.preventDefault(); toggleEdit(); return; }
   if (e.shiftKey && k === 'a') { toggleMenu(addMenu, $('#btnAdd')); return; }
   if (e.shiftKey && k === 'd') { duplicateSelected(); return; }
@@ -1341,10 +1601,14 @@ window.addEventListener('keydown', e => {
     case '5': setView('persp'); break;
     case 'a': selectAll(); break;
     case 'b': toggleBox(); break;
+    case 'p': setBrush(!brush.on); break;
+    case '[': if (brush.on) { brush.radius = Math.max(0.03, +(brush.radius / 1.15).toFixed(3)); syncBrushBar(); } break;
+    case ']': if (brush.on) { brush.radius = Math.min(2.5, +(brush.radius * 1.15).toFixed(3)); syncBrushBar(); } break;
     case 'o': if (state.mode === 'edit') { edit.prop = !edit.prop; selectionChanged(); toast(edit.prop ? 'Edição proporcional ligada' : 'Edição proporcional desligada'); } break;
     case 'escape':
       document.querySelectorAll('.dd').forEach(d => d.hidden = true);
-      if (state.mode === 'edit') { edit.sel.clear(); edit.box = false; selrect.hidden = true; selectionChanged(); } else selectObject(null);
+      if (brush.on) setBrush(false);
+      else if (state.mode === 'edit') { edit.sel.clear(); edit.box = false; selrect.hidden = true; selectionChanged(); } else selectObject(null);
       break;
   }
 });
@@ -1368,9 +1632,12 @@ renderer.setAnimationLoop(() => {
   await DB.open();
   let list = []; try { list = await DB.all(); } catch (e) {}
   const lastId = lsGet('forja3d:last');
-  let p = list.find(x => x.id === lastId) || list.sort((a, b) => (b.updated || 0) - (a.updated || 0))[0];
-  if (!p) { p = exampleProject(); await openProject(p); await saveNow(); }
+  const pick = list.find(x => x.id === lastId) || list.sort((a, b) => (b.updated || 0) - (a.updated || 0))[0];
+  const p = pick && (pick.objects ? pick : await DB.get(pick.id));
+  if (!p) { await openProject(exampleProject()); await saveNow(); }
   else await openProject(p);
+  // botão Celular só no computador que roda o servidor (no próprio celular não faz sentido)
+  $('#btnPhone').hidden = !(DB.server && DB.server.local);
   $('#loading').remove();
   updateModeUI(); setTool('translate'); updateUndo();
 })().catch(err => { $('#loading').textContent = 'Não deu para iniciar o editor: ' + err.message; console.error(err); });
