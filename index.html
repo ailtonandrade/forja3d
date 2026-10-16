@@ -880,7 +880,7 @@ function duplicateSelected() {
 }
 function deleteSelected() {
   const s = state.selected; if (!s) return;
-  if (state.mode === 'edit') { toast('Excluir vértices ainda não existe neste protótipo. Saia do modo edição (Tab) para excluir o objeto.'); return; }
+  if (state.mode === 'edit') { dissolveEdges(); return; }
   transform.detach(); scene.remove(s.mesh); disposeObj(s);
   state.objects = state.objects.filter(o => o !== s);
   selectObject(null); commit();
@@ -1569,6 +1569,61 @@ function finishLoopCut(op) {
   edit.sel = new Set(newVerts.map(n => edit.v2g[n]));
   opEnd(); selectionChanged(); commit();
   toast(`Corte aplicado em ${op.ring.length} face(s)${op.cuts === 2 ? ', com 2 cortes' : ''}. As arestas novas estão selecionadas.`);
+}
+
+// Dissolver (o contrário do Cortar): a volta de arestas que passa pela aresta escolhida some e os quadrados
+// dos dois lados viram um só. Cada vértice da volta é levado até o vizinho de um dos lados; os quadrados desse lado
+// achatam e caem, os do outro lado se esticam até ali - na mesma forma (e com a mesma textura) de antes do corte.
+function dissolveEdges() {
+  if (state.mode !== 'edit' || edit.op) return;
+  const T = topo(), G = edit.groups;
+  let keys = selectedEdgeKeys();
+  if (!keys.length && edit.sel.size > 1) keys = [...T.edgeTris.keys()].filter(k => !T.diag.has(k) && edit.sel.has(Math.floor(k / EK)) && edit.sel.has(k % EK));
+  if (!keys.length) { toast('Selecione uma aresta do corte (modo Arestas) e aperte Delete para dissolver a volta inteira. Para apagar o objeto, saia do modo edição (Tab).'); return; }
+  if (edit.mirror && edit.mir) for (const k of [...keys]) { const ma = edit.mir[Math.floor(k / EK)], mb = edit.mir[k % EK]; if (ma >= 0 && mb >= 0 && ma !== mb && T.edgeTris.has(ekey(ma, mb))) keys.push(ekey(ma, mb)); }
+  const gTo = new Map(), vTo = new Map();   // vértice da volta -> vizinho (por grupo e, dentro do mesmo quadrado, por índice, pra manter a textura)
+  let loops = 0, skipped = 0, corners = 0;
+  // vizinho de cada vértice da volta num dos lados (a fileira de quadrados encostada nela)
+  const side = (a, b, q) => { const m = new Map(), [n] = oppositeEdge(q, a, b), ring = edgeRing(a, n) || []; for (const st of ring) { m.set(st.A, st.B); m.set(st.A2, st.B2); } return { ring, m }; };
+  for (const k of keys) {
+    const a = Math.floor(k / EK), b = k % EK;
+    if (gTo.has(a) && gTo.has(b)) continue;   // já dissolvida junto com outra aresta da mesma volta
+    const qs = quadsOnEdge(a, b);
+    if (qs.length !== 2) { skipped++; continue; }   // borda ou triângulo: não há "dois lados" pra juntar
+    const s1 = side(a, b, qs[0]), s2 = side(a, b, qs[1]), ring = s1.ring;
+    if (!ring.length) { skipped++; continue; }
+    // só é um corte se cada vértice da volta estiver no caminho entre os vizinhos dos dois lados;
+    // numa quina (a aresta de um cubo, por exemplo) dissolver arrancaria a quina e amassaria a peça
+    let bent = false;
+    for (const [L, R] of s1.m) { const R2 = s2.m.get(L); if (R2 === undefined) continue; const u = _pa.subVectors(G[L].p, G[R].p).normalize(), v = new THREE.Vector3().subVectors(G[R2].p, G[L].p).normalize(); if (u.dot(v) < 0.8) { bent = true; break; } }
+    if (bent) { corners++; continue; }
+    for (const st of ring) {
+      const q = T.quads[st.q], vi = g => q.vi[q.g.indexOf(g)];
+      for (const [L, R] of [[st.A, st.B], [st.A2, st.B2]]) {
+        if (gTo.has(R) && gTo.get(R) === L) continue;
+        if (!gTo.has(L)) gTo.set(L, R);
+        vTo.set(vi(L), vi(R));
+      }
+    }
+    loops++;
+  }
+  if (!loops) { toast(corners ? 'Essa aresta é uma quina da peça, não um corte: dissolver arrancaria a quina. Escolha uma aresta de um corte (uma volta que passa no meio de faces retas).' : 'Essa aresta não separa dois quadrados (fica na borda ou entre triângulos), então não dá pra dissolver.'); return; }
+  const v2g = edit.v2g, target = i => {   // segue a cadeia (voltas vizinhas dissolvidas juntas) até um vértice que fica
+    for (let n = 0; n < 64; n++) { const g = v2g[i]; if (!gTo.has(g)) return i; i = vTo.has(i) ? vTo.get(i) : G[gTo.get(g)].idx[0]; }
+    return i;
+  };
+  const mesh = edit.obj.mesh, geo = mesh.geometry, pos = geo.attributes.position, uv = geo.attributes.uv, ix = geo.index.array;
+  const map = new Map(), NP = [], NU = [], NI = [];
+  for (let t = 0; t < ix.length; t += 3) {
+    const v = [target(ix[t]), target(ix[t + 1]), target(ix[t + 2])], g = v.map(i => v2g[i]);
+    if (g[0] === g[1] || g[1] === g[2] || g[0] === g[2]) continue;   // quadrado achatado: cai
+    for (const i of v) { let n = map.get(i); if (n === undefined) { n = NP.length / 3; map.set(i, n); NP.push(pos.getX(i), pos.getY(i), pos.getZ(i)); if (uv) NU.push(uv.getX(i), uv.getY(i)); } NI.push(n); }
+  }
+  if (!NI.length) { toast('Isso apagaria a malha inteira.'); return; }
+  const ng = buildGeometry({ prim: 'custom' }, { position: NP, uv: uv ? NU : null, index: NI });
+  geo.dispose(); mesh.geometry = ng; edit.wire.geometry = ng;
+  edit.sel.clear(); markModified(); buildEditData(); selectionChanged(); commit();
+  toast(`${loops} volta${loops > 1 ? 's' : ''} de arestas dissolvida${loops > 1 ? 's' : ''}${skipped + corners ? ` (${skipped + corners} aresta${skipped + corners > 1 ? 's' : ''} de borda ou quina ignorada${skipped + corners > 1 ? 's' : ''})` : ''}. Ctrl+Z desfaz.`);
 }
 
 // ---- painel da operação ----
@@ -2591,11 +2646,12 @@ function renderEditTab(box) {
     el('h4', {}, 'Criar e cortar'),
     el('div', { class: 'seg', style: 'align-self:flex-start' }, [['vert', 'Vértices'], ['edge', 'Arestas'], ['face', 'Faces']].map(([m, t]) =>
       el('button', { class: edit.selMode === m ? 'on' : '', onclick: () => setSelMode(m) }, t))),
-    el('p', { class: 'note' }, 'Extrudar puxa as faces ou arestas selecionadas criando polígonos novos. Cortar passa um corte em volta da peça, pelos quadrados, a partir da aresta que você escolher.'),
+    el('p', { class: 'note' }, 'Extrudar puxa as faces ou arestas selecionadas criando polígonos novos. Cortar passa um corte em volta da peça, pelos quadrados, a partir da aresta que você escolher; Dissolver desfaz um corte a partir de uma aresta dele.'),
     el('div', { class: 'btns' },
       el('button', { class: 'btn', onclick: startExtrude }, 'Extrudar (E)'),
       el('button', { class: 'btn', onclick: () => startLoopCut(1) }, 'Cortar (C)'),
-      el('button', { class: 'btn', onclick: () => startLoopCut(2) }, 'Cortar em 2 (Shift+C)'))));
+      el('button', { class: 'btn', onclick: () => startLoopCut(2) }, 'Cortar em 2 (Shift+C)'),
+      el('button', { class: 'btn', onclick: dissolveEdges, title: 'Some com a volta de arestas que passa pela aresta selecionada e junta os dois lados numa face só' }, 'Dissolver aresta (Del)'))));
   box.append(el('div', { class: 'grp' },
     el('h4', {}, 'Pincel'),
     el('p', { class: 'note' }, brush.on ? 'Pincel ligado: os ajustes ficam na barra embaixo do viewport. A área azul mostra o que vai se mexer.' : 'Esculpa passando o pincel na peça, com força maior no centro e menor na borda.'),
