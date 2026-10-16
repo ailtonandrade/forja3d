@@ -13,6 +13,7 @@ const entries = [
   'examples/jsm/exporters/GLTFExporter.js',
   'examples/jsm/loaders/GLTFLoader.js',
   'examples/jsm/lights/RectAreaLightUniformsLib.js',
+  'examples/jsm/lines/LineSegments2.js',
 ];
 const seen = new Set(), queue = [...entries];
 while (queue.length) {

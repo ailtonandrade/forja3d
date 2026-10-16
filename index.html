@@ -354,6 +354,9 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RectAreaLightUniformsLib } from 'three/addons/lights/RectAreaLightUniformsLib.js';
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 RectAreaLightUniformsLib.init();   // a luz de área (softbox) precisa disso uma vez
 
 const $ = s => document.querySelector(s);
@@ -926,6 +929,7 @@ function placeAbTags() {
 
 /* ================= Modo edição (vértices) ================= */
 const edit = { obj: null, groups: [], v2g: null, nb: null, sel: new Set(), points: null, wire: null, pivot: new THREE.Object3D(), startInv: new THREE.Matrix4(), orig: null, affected: [], prop: false, radius: 0.5, amount: 0.08, box: false, xray: false, modified: false, weldDist: 0.01, selMode: 'vert', op: null, topo: null,
+  selE: new Set(), selF: new Set(),   // arestas (chave do par de vértices) e triângulos escolhidos no modo Arestas/Faces
   mirror: false, mirrorAxis: 0, mir: null, changed: new Set(), mirrorDom: 1, mirrorPlane: null, roundR: 0.08 };
 // painel "Juntar objetos": aberto ou não, quais foram marcados e a distância para soldar os vértices encostados
 const join = { open: false, pick: new Set(), dist: 0.01 };
@@ -958,10 +962,10 @@ function paintOverlay(weights, color = C_SEL, alpha = 0.6) {
   if (edit.mirror && edit.mir) for (const [g, w] of weights) { const m = edit.mir[g]; if (m >= 0 && !done.has(m)) paint(m, w, C_MIR, alpha * 0.85); }
   col.needsUpdate = true;
 }
-const paintSelection = () => paintOverlay(edit.selMode === 'edge' ? [] : edit.prop && edit.affected.length ? edit.affected : [...edit.sel].map(g => [g, 1]));
+const paintSelection = () => paintOverlay(edit.prop && edit.affected.length ? edit.affected : edit.selMode !== 'vert' ? [] : [...edit.sel].map(g => [g, 1]));
 
 function buildEditData() {
-  edit.topo = null; edit.mir = null; edit.changed.clear();
+  edit.topo = null; edit.mir = null; edit.changed.clear(); edit.selE.clear(); edit.selF.clear();
   const geo = edit.obj.mesh.geometry, pos = geo.attributes.position;
   const map = new Map(), groups = [], v2g = new Int32Array(pos.count);
   for (let i = 0; i < pos.count; i++) {
@@ -1018,8 +1022,13 @@ function enterEdit() {
   o.mesh.add(edit.wire);
   // arestas desenhadas sem as diagonais dos quadrados (escuras) e as selecionadas em destaque
   edit.lineAll = noRay(new THREE.LineSegments(new THREE.BufferGeometry(), edgeMatAll)); edit.lineAll.renderOrder = 5;
-  edit.lineSel = noRay(new THREE.LineSegments(new THREE.BufferGeometry(), edgeMatSel)); edit.lineSel.renderOrder = 7;
-  o.mesh.add(edit.lineAll, edit.lineSel);
+  edit.lineSel = noRay(new LineSegments2(new LineSegmentsGeometry(), edgeMatSel)); edit.lineSel.renderOrder = 8;
+  edit.lineMir = noRay(new LineSegments2(new LineSegmentsGeometry(), edgeMatMir)); edit.lineMir.renderOrder = 7;
+  edit.faceHi = noRay(new THREE.Mesh(new THREE.BufferGeometry(), faceHiMat)); edit.faceHi.renderOrder = 6;
+  edit.selHalo = noRay(new THREE.Points(new THREE.BufferGeometry(), selHaloMat)); edit.selHalo.renderOrder = 11;
+  edit.selDot = noRay(new THREE.Points(new THREE.BufferGeometry(), selDotMat)); edit.selDot.renderOrder = 12;
+  for (const x of [edit.lineSel, edit.lineMir, edit.faceHi, edit.selHalo, edit.selDot]) x.frustumCulled = false;
+  o.mesh.add(edit.lineAll, edit.lineSel, edit.lineMir, edit.faceHi, edit.selHalo, edit.selDot);
   buildEditData();
   boxHelper.visible = false; transform.detach();
   buildAbTags(); updateModeUI(); renderPanel(); refreshStatus();
@@ -1028,7 +1037,8 @@ function exitEdit() {
   if (state.mode !== 'edit') return;
   if (edit.op) cancelOp();
   const m = edit.obj.mesh;
-  for (const l of [edit.lineAll, edit.lineSel]) if (l) { m.remove(l); l.geometry.dispose(); }
+  for (const l of [edit.lineAll, edit.lineSel, edit.lineMir, edit.faceHi, edit.selHalo, edit.selDot]) if (l) { m.remove(l); l.geometry.dispose(); }
+  edit.lineMir = edit.faceHi = edit.selHalo = edit.selDot = null;
   if (edit.mirrorPlane) { m.remove(edit.mirrorPlane); edit.mirrorPlane.traverse(c => c.geometry?.dispose()); edit.mirrorPlane = null; }
   edit.lineAll = edit.lineSel = null;
   if (edit.points) { m.remove(edit.points); edit.points.geometry.dispose(); edit.points = null; }
@@ -1281,22 +1291,58 @@ function topo() {
 
 // ---- linhas das arestas (todas em escuro, as selecionadas em destaque) ----
 const edgeMatAll = new THREE.LineBasicMaterial({ color: 0x0b0d10, transparent: true, opacity: 0.55, depthFunc: THREE.LessEqualDepth });
-const edgeMatSel = new THREE.LineBasicMaterial({ color: 0xff9a52, depthFunc: THREE.LessEqualDepth });
+// O WebGL só desenha linha de 1 pixel: as arestas selecionadas usam as linhas grossas do three.js (em pixels de tela)
+const edgeMatSel = new LineMaterial({ color: 0xff9a52, linewidth: 4, worldUnits: false, transparent: true, depthFunc: THREE.LessEqualDepth });
+const edgeMatMir = new LineMaterial({ color: 0xb07cff, linewidth: 3, worldUnits: false, transparent: true, opacity: 0.9, depthFunc: THREE.LessEqualDepth });
+const faceHiMat = new THREE.MeshBasicMaterial({ color: 0xff9a52, transparent: true, opacity: 0.38, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+const selHaloMat = new THREE.PointsMaterial({ color: 0x15181c, size: 14, sizeAttenuation: false, depthFunc: THREE.LessEqualDepth, transparent: true });
+const selDotMat = new THREE.PointsMaterial({ color: 0xff9a52, size: 9, sizeAttenuation: false, depthFunc: THREE.LessEqualDepth, transparent: true });
+// arestas que contam como selecionadas: as escolhidas no modo Arestas ou, se não houver, as com os dois vértices marcados
+function selectedEdgeKeys() {
+  const T = topo();
+  if (edit.selE.size) return [...edit.selE];
+  if (edit.selMode === 'vert') return [];
+  return [...T.edgeTris.keys()].filter(k => !T.diag.has(k) && edit.sel.has(Math.floor(k / EK)) && edit.sel.has(k % EK));
+}
+function selectedTris() {
+  const T = topo();
+  if (edit.selF.size) return [...edit.selF];
+  if (edit.selE.size || edit.selMode !== 'face') return [];
+  const out = [], nt = edit.obj.mesh.geometry.index.count / 3; for (let t = 0; t < nt; t++) if (T.tg(t).every(g => edit.sel.has(g))) out.push(t);
+  return out;
+}
+function setLines(line, arr) {
+  if (!arr.length) { line.visible = false; return; }
+  line.geometry.dispose(); line.geometry = new LineSegmentsGeometry().setPositions(arr); line.visible = !edit.op;
+}
 function rebuildEdgeLines() {
   if (!edit.obj || !edit.lineAll) return;
-  const T = topo(), G = edit.groups, all = [], sel = [];
-  for (const k of T.edgeTris.keys()) {
-    if (T.diag.has(k)) continue;
-    const a = Math.floor(k / EK), b = k % EK, pa = G[a].p, pb = G[b].p;
-    all.push(pa.x, pa.y, pa.z, pb.x, pb.y, pb.z);
-    if (edit.selMode !== 'vert' && edit.sel.has(a) && edit.sel.has(b)) sel.push(pa.x, pa.y, pa.z, pb.x, pb.y, pb.z);
+  const T = topo(), G = edit.groups, all = [], sel = [], mir = [], push = (arr, a, b) => { const pa = G[a].p, pb = G[b].p; arr.push(pa.x, pa.y, pa.z, pb.x, pb.y, pb.z); };
+  for (const k of T.edgeTris.keys()) if (!T.diag.has(k)) push(all, Math.floor(k / EK), k % EK);
+  edit.lineAll.geometry.dispose(); edit.lineAll.geometry = lineGeo(all);
+  for (const k of selectedEdgeKeys()) {
+    const a = Math.floor(k / EK), b = k % EK; push(sel, a, b);
+    if (edit.mirror && edit.mir) { const ma = edit.mir[a], mb = edit.mir[b]; if (ma >= 0 && mb >= 0 && ekey(ma, mb) !== k) push(mir, ma, mb); }
   }
-  for (const [line, arr] of [[edit.lineAll, all], [edit.lineSel, sel]]) { line.geometry.dispose(); line.geometry = lineGeo(arr); }
+  if (edit.lineSel) { setLines(edit.lineSel, sel); setLines(edit.lineMir, mir); }
+  // faces selecionadas preenchidas por inteiro (sem "vazar" para os vizinhos, como a pintura por vértice)
+  if (edit.faceHi) {
+    const f = []; for (const t of selectedTris()) for (const g of T.tg(t)) { const p = G[g].p; f.push(p.x, p.y, p.z); }
+    edit.faceHi.geometry.dispose(); edit.faceHi.geometry = new THREE.BufferGeometry(); edit.faceHi.geometry.setAttribute('position', new THREE.Float32BufferAttribute(f, 3));
+    edit.faceHi.visible = f.length > 0 && !edit.op;
+  }
+  // vértices selecionados maiores e com contorno (modo Vértices)
+  if (edit.selDot) {
+    const v = []; edit.sel.forEach(g => { const p = G[g].p; v.push(p.x, p.y, p.z); });
+    for (const pts of [edit.selHalo, edit.selDot]) { pts.geometry.dispose(); pts.geometry = new THREE.BufferGeometry(); pts.geometry.setAttribute('position', new THREE.Float32BufferAttribute(v, 3)); }
+    const show = v.length > 0 && edit.selMode === 'vert' && !brush.on && !edit.op;
+    edit.selHalo.visible = edit.selDot.visible = show;
+  }
 }
 function updateEditVisibility() {
   if (edit.points) edit.points.visible = !brush.on && !edit.op && edit.selMode === 'vert';
-  if (edit.lineSel) edit.lineSel.visible = !edit.op;
   if (edit.lineAll) edit.lineAll.visible = !(edit.op && edit.op.kind === 'extrude');
+  rebuildEdgeLines();
 }
 
 // ---- selecionar aresta ou face com um clique ----
@@ -1313,18 +1359,27 @@ function pickEdge(e) {
   return { edge: best, quad: q, tri: t };
 }
 function pickElement(e) {
-  let picks = [];
-  if (edit.selMode === 'edge') { const r = pickEdge(e); if (r) picks = r.edge; }
-  else { const hit = brushHit(e); if (hit) { const T = topo(), q = T.triQuad[hit.faceIndex]; picks = q >= 0 ? T.quads[q].g.slice() : T.tg(hit.faceIndex); } }
-  const allIn = picks.length && picks.every(g => edit.sel.has(g));
-  if (!e.shiftKey) edit.sel.clear();
-  if (e.shiftKey && allIn) picks.forEach(g => edit.sel.delete(g)); else picks.forEach(g => edit.sel.add(g));
+  const T = topo();
+  if (!e.shiftKey) { edit.selE.clear(); edit.selF.clear(); }
+  if (edit.selMode === 'edge') {
+    const r = pickEdge(e);
+    if (r) { const k = ekey(...r.edge); if (e.shiftKey && edit.selE.has(k)) edit.selE.delete(k); else edit.selE.add(k); }
+  } else {
+    const hit = brushHit(e);
+    if (hit) { const q = T.triQuad[hit.faceIndex], tris = q >= 0 ? T.quads[q].tris : [hit.faceIndex], on = tris.every(t => edit.selF.has(t)); for (const t of tris) { if (e.shiftKey && on) edit.selF.delete(t); else edit.selF.add(t); } }
+  }
+  // os vértices das arestas/faces escolhidas viram a seleção usada pelo gizmo e pelas ferramentas
+  edit.sel = new Set();
+  for (const k of edit.selE) { edit.sel.add(Math.floor(k / EK)); edit.sel.add(k % EK); }
+  for (const t of edit.selF) T.tg(t).forEach(g => edit.sel.add(g));
   selectionChanged();
 }
+// seleção mudou por outro caminho (vértice, caixa, tudo, limpar): as escolhas exatas de aresta/face deixam de valer
+function clearElemSel() { edit.selE.clear(); edit.selF.clear(); }
 function setSelMode(m) {
-  edit.selMode = m;
+  edit.selMode = m; clearElemSel();
   document.querySelectorAll('#selModeSeg button').forEach(b => b.classList.toggle('on', b.dataset.sm === m));
-  updateEditVisibility(); rebuildEdgeLines(); paintSelection(); renderPanel();
+  updateEditVisibility(); rebuildEdgeLines(); paintSelection(); renderPanel(); refreshStatus();
 }
 
 // ---- operações com prévia: extrudar e cortar ----
@@ -1354,8 +1409,14 @@ function startExtrude() {
   if (state.mode !== 'edit' || edit.op) return;
   const mesh = edit.obj.mesh, geo = mesh.geometry, T = topo(), ix = geo.index.array, nt = ix.length / 3, S = edit.sel, G = edit.groups;
   const pos = geo.attributes.position, uv = geo.attributes.uv;
-  const region = []; for (let t = 0; t < nt; t++) if (T.tg(t).every(g => S.has(g))) region.push(t);
-  const edges = region.length ? [] : [...T.edgeTris.keys()].filter(k => !T.diag.has(k) && S.has(Math.floor(k / EK)) && S.has(k % EK));
+  // arestas/faces escolhidas de verdade têm prioridade; sem elas, vale o que os vértices marcados formam
+  let region = [], edges = [];
+  if (edit.selE.size) edges = [...edit.selE];
+  else if (edit.selF.size) region = [...edit.selF];
+  else {
+    for (let t = 0; t < nt; t++) if (T.tg(t).every(g => S.has(g))) region.push(t);
+    if (!region.length) edges = [...T.edgeTris.keys()].filter(k => !T.diag.has(k) && S.has(Math.floor(k / EK)) && S.has(k % EK));
+  }
   if (!region.length && !edges.length) { toast('Selecione faces ou arestas para extrudar (use os modos Arestas ou Faces na barra de cima).'); return; }
   const P = Array.from(pos.array), U = uv ? Array.from(uv.array) : new Array(pos.count * 2).fill(0), I = Array.from(ix);
   const vert = (x, y, z, u = 0, v = 0) => { P.push(x, y, z); U.push(u, v); return P.length / 3 - 1; };
@@ -1999,7 +2060,7 @@ renderer.domElement.addEventListener('pointerup', e => {
   if (d.timer) clearTimeout(d.timer);
   if (d.long) return;   // o toque longo já selecionou
   if (d.box) {
-    selrect.hidden = true; orbit.enabled = true; edit.box = false;
+    selrect.hidden = true; orbit.enabled = true; edit.box = false; clearElemSel();
     if (!e.shiftKey) edit.sel.clear();
     const x0 = Math.min(p.x, d.x), x1 = Math.max(p.x, d.x), y0 = Math.min(p.y, d.y), y1 = Math.max(p.y, d.y);
     for (let g = 0; g < edit.groups.length; g++) {
@@ -2030,6 +2091,7 @@ function clickSelect(e) {
       const hit = ray.intersectObject(edit.obj.mesh, false)[0];
       if (hit && hit.face) picks = [hit.face.a, hit.face.b, hit.face.c].map(i => edit.v2g[i]);
     }
+    clearElemSel();
     if (!e.shiftKey) edit.sel.clear();
     for (const g of picks) { if (e.shiftKey && edit.sel.has(g) && picks.length === 1) edit.sel.delete(g); else edit.sel.add(g); }
     selectionChanged(); return;
@@ -2523,7 +2585,7 @@ function renderEditTab(box) {
       el('button', { class: 'btn', onclick: selectAll }, 'Tudo (A)'),
       el('button', { class: 'btn', onclick: invertSel }, 'Inverter'),
       el('button', { class: 'btn' + (edit.box ? ' on' : ''), onclick: toggleBox }, 'Caixa (B)'),
-      el('button', { class: 'btn', onclick: () => { edit.sel.clear(); selectionChanged(); } }, 'Limpar')),
+      el('button', { class: 'btn', onclick: () => { edit.sel.clear(); clearElemSel(); selectionChanged(); } }, 'Limpar')),
     check('f-xray', 'Raio-X: ver e pegar vértices de trás', edit.xray, v => { edit.xray = v; pointsMat.depthTest = !v; pointsMat.needsUpdate = true; })));
   box.append(el('div', { class: 'grp' },
     el('h4', {}, 'Criar e cortar'),
@@ -2578,8 +2640,8 @@ function renderEditTab(box) {
     el('p', { class: 'note' }, 'Subdividir divide cada triângulo em 4, dando mais vértices para esculpir.'),
     el('div', { class: 'btns' }, el('button', { class: 'btn', onclick: subdivide }, 'Subdividir'), el('button', { class: 'btn pri', onclick: exitEdit }, 'Concluir edição (Tab)'))));
 }
-function selectAll() { if (state.mode !== 'edit') return; if (edit.sel.size === edit.groups.length) edit.sel.clear(); else edit.groups.forEach((_, g) => edit.sel.add(g)); selectionChanged(); }
-function invertSel() { const s = new Set(); edit.groups.forEach((_, g) => { if (!edit.sel.has(g)) s.add(g); }); edit.sel = s; selectionChanged(); }
+function selectAll() { if (state.mode !== 'edit') return; clearElemSel(); if (edit.sel.size === edit.groups.length) edit.sel.clear(); else edit.groups.forEach((_, g) => edit.sel.add(g)); selectionChanged(); }
+function invertSel() { clearElemSel(); const s = new Set(); edit.groups.forEach((_, g) => { if (!edit.sel.has(g)) s.add(g); }); edit.sel = s; selectionChanged(); }
 function toggleBox() { if (state.mode !== 'edit') return; edit.box = !edit.box; renderPanel(); if (edit.box) toast('Arraste no viewport para selecionar em caixa.'); refreshStatus(); }
 
 function currentMat() { return state.selected ? matById(state.selected.matId) : matById(editingMatId); }
@@ -2718,13 +2780,16 @@ function refreshStatus() {
   let nl = 0;
   for (const o of state.objects) { if (o.prim === 'light') { nl++; continue; } const g = o.mesh.geometry; v += g.attributes.position.count; t += (g.index ? g.index.count : g.attributes.position.count) / 3; }
   $('#stCounts').textContent = `${state.objects.length - nl} objetos${nl ? ` · ${nl} luz${nl > 1 ? 'es' : ''}` : ''} · ${v.toLocaleString('pt-BR')} vértices · ${Math.round(t).toLocaleString('pt-BR')} triângulos`;
-  $('#stSel').textContent = state.mode === 'edit' ? `${edit.sel.size} vértice(s) selecionado(s)` : state.multi.length >= 2 ? `${state.multi.length} objetos selecionados · A: ${state.multi[0].name}` : state.selected ? `Selecionado: ${state.selected.name}` : '';
+  $('#stSel').textContent = state.mode === 'edit' ? (edit.selE.size ? `${edit.selE.size} aresta(s) selecionada(s)` : edit.selF.size ? `${Math.ceil(edit.selF.size / 2)} face(s) selecionada(s)` : `${edit.sel.size} vértice(s) selecionado(s)`) : state.multi.length >= 2 ? `${state.multi.length} objetos selecionados · A: ${state.multi[0].name}` : state.selected ? `Selecionado: ${state.selected.name}` : '';
   $('#stMode').textContent = { translate: 'Mover', rotate: 'Girar', scale: 'Escalar' }[state.tool] + (state.snap ? ' · ímã' : '');
   if (brush.on) $('#stSel').textContent = `Pincel: ${$('#brushModes .on')?.textContent || ''}`;
   $('#hint').innerHTML = brush.on
     ? 'Arraste na peça para esculpir · fora dela gira a câmera · <b>Ctrl</b> inverte · <b>[</b> <b>]</b> tamanho · <b>P</b> desliga'
     : state.mode === 'edit'
-    ? (edit.box ? 'Arraste para desenhar a caixa de seleção · <b>Shift</b> soma à seleção' : 'Clique nos pontos · <b>Shift</b> soma · <b>B</b> caixa · <b>A</b> tudo · <b>O</b> proporcional · <b>Tab</b> conclui')
+    ? (edit.box ? 'Arraste para desenhar a caixa de seleção · <b>Shift</b> soma à seleção'
+      : edit.selMode === 'edge' ? 'Clique numa aresta · <b>Shift</b> + clique soma ou tira outras (no celular: tocar e segurar) · <b>E</b> extruda · <b>C</b> corta'
+      : edit.selMode === 'face' ? 'Clique numa face · <b>Shift</b> + clique soma ou tira outras (no celular: tocar e segurar) · <b>E</b> extruda'
+      : 'Clique nos pontos · <b>Shift</b> soma · <b>B</b> caixa · <b>A</b> tudo · <b>O</b> proporcional · <b>Tab</b> conclui')
     : 'Clique seleciona · arraste gira a câmera · botão direito arrasta · roda aproxima · <b>G</b> <b>R</b> <b>S</b> · duplo clique edita';
 }
 function updateModeUI() {
@@ -2919,7 +2984,7 @@ window.addEventListener('keydown', e => {
     case 'escape':
       document.querySelectorAll('.dd').forEach(d => d.hidden = true);
       if (brush.on) setBrush(false);
-      else if (state.mode === 'edit') { edit.sel.clear(); edit.box = false; selrect.hidden = true; selectionChanged(); } else selectObject(null);
+      else if (state.mode === 'edit') { edit.sel.clear(); clearElemSel(); edit.box = false; selrect.hidden = true; selectionChanged(); } else selectObject(null);
       break;
   }
 });
@@ -2930,6 +2995,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) saveN
 new ResizeObserver(() => {
   const w = viewport.clientWidth, h = viewport.clientHeight; if (!w || !h) return;
   renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+  edgeMatSel.resolution.set(w, h); edgeMatMir.resolution.set(w, h);
 }).observe(viewport);
 renderer.setAnimationLoop(() => {
   orbit.update();
