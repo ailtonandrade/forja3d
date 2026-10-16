@@ -3,6 +3,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Forja 3D</title>
+<link rel="icon" href="assets/icone.ico">
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -268,6 +269,7 @@ input[type=color]{width:100%;height:26px;border:1px solid var(--line);border-rad
       <div class="seg" id="selModeSeg" role="group" aria-label="Selecionar por" hidden>
         <button data-sm="vert" class="on" title="Selecionar vértices">Vértices</button><button data-sm="edge" title="Selecionar arestas">Arestas</button><button data-sm="face" title="Selecionar faces">Faces</button>
         <button id="btnExtrude" title="Extrudar a seleção (E)">Extrudar</button><button id="btnCut" title="Cortar em loop (C) · Shift = 2 cortes">Cortar</button>
+        <button id="btnMirror" title="Espelho (M): o que você faz de um lado acontece igual do outro">Espelho X</button>
       </div>
       <div class="seg" id="viewSeg" role="group" aria-label="Vistas">
         <button data-view="front" title="Vista frontal (1)">Frente</button><button data-view="right" title="Vista lateral (3)">Lado</button><button data-view="top" title="Vista de topo (7)">Topo</button><button data-view="persp" title="Perspectiva (5)">3/4</button>
@@ -286,6 +288,7 @@ input[type=color]{width:100%;height:26px;border:1px solid var(--line);border-rad
       <label>Força <input type="range" id="bStr" min="0.02" max="1" step="0.01"><output id="oStr"></output></label>
       <label title="Parte do centro que empurra com força total; o resto vai enfraquecendo até a borda">Núcleo <input type="range" id="bCore" min="0" max="0.95" step="0.01"><output id="oCore"></output></label>
       <div class="seg"><button id="bCurve" title="Como a força cai do núcleo até a borda">Queda: suave</button><button id="bInv" title="Inverte o pincel (ou segure Ctrl)">Inverter</button></div>
+      <div class="seg"><button id="bMirror" title="Espelho (M): esculpe dos dois lados ao mesmo tempo">Espelho X</button></div>
       <div class="seg"><button id="bDyn" title="Subdivisão dinâmica: corta as arestas que ficam compridas embaixo do pincel, para a superfície ganhar polígonos em vez de esticar (o Dyntopo do Blender)">Subdividir ao esculpir</button></div>
       <label id="bDetWrap" title="Tamanho máximo da aresta, em relação ao pincel. Menor = polígonos menores e mais detalhe (malha mais pesada)">Detalhe <input type="range" id="bDet" min="0.08" max="0.6" step="0.01"><output id="oDet"></output></label>
     </div>
@@ -922,7 +925,8 @@ function placeAbTags() {
 }
 
 /* ================= Modo edição (vértices) ================= */
-const edit = { obj: null, groups: [], v2g: null, nb: null, sel: new Set(), points: null, wire: null, pivot: new THREE.Object3D(), startInv: new THREE.Matrix4(), orig: null, affected: [], prop: false, radius: 0.5, amount: 0.08, box: false, xray: false, modified: false, weldDist: 0.01, selMode: 'vert', op: null, topo: null };
+const edit = { obj: null, groups: [], v2g: null, nb: null, sel: new Set(), points: null, wire: null, pivot: new THREE.Object3D(), startInv: new THREE.Matrix4(), orig: null, affected: [], prop: false, radius: 0.5, amount: 0.08, box: false, xray: false, modified: false, weldDist: 0.01, selMode: 'vert', op: null, topo: null,
+  mirror: false, mirrorAxis: 0, mir: null, changed: new Set(), mirrorDom: 1, mirrorPlane: null, roundR: 0.08 };
 // painel "Juntar objetos": aberto ou não, quais foram marcados e a distância para soldar os vértices encostados
 const join = { open: false, pick: new Set(), dist: 0.01 };
 scene.add(edit.pivot);
@@ -943,16 +947,21 @@ function buildOverlay() {
   edit.overlay.raycast = () => {}; edit.overlay.renderOrder = 4; edit.overlay.frustumCulled = false;
   m.add(edit.overlay);
 }
+const C_MIR = new THREE.Color(0xb07cff);
 function paintOverlay(weights, color = C_SEL, alpha = 0.6) {
   if (!edit.overlay) return;
   const col = edit.overlay.geometry.attributes.color, a = col.array; a.fill(0);
-  for (const [g, w] of weights) for (const i of edit.groups[g].idx) { a[i * 4] = color.r; a[i * 4 + 1] = color.g; a[i * 4 + 2] = color.b; a[i * 4 + 3] = alpha * (0.25 + 0.75 * w); }
+  const paint = (g, w, c, al) => { for (const i of edit.groups[g].idx) { a[i * 4] = c.r; a[i * 4 + 1] = c.g; a[i * 4 + 2] = c.b; a[i * 4 + 3] = al * (0.25 + 0.75 * w); } };
+  const done = new Set();
+  for (const [g, w] of weights) { paint(g, w, color, alpha); done.add(g); }
+  // espelho ligado: o que vai se mexer do outro lado aparece em lilás
+  if (edit.mirror && edit.mir) for (const [g, w] of weights) { const m = edit.mir[g]; if (m >= 0 && !done.has(m)) paint(m, w, C_MIR, alpha * 0.85); }
   col.needsUpdate = true;
 }
 const paintSelection = () => paintOverlay(edit.selMode === 'edge' ? [] : edit.prop && edit.affected.length ? edit.affected : [...edit.sel].map(g => [g, 1]));
 
 function buildEditData() {
-  edit.topo = null;
+  edit.topo = null; edit.mir = null; edit.changed.clear();
   const geo = edit.obj.mesh.geometry, pos = geo.attributes.position;
   const map = new Map(), groups = [], v2g = new Int32Array(pos.count);
   for (let i = 0; i < pos.count; i++) {
@@ -979,6 +988,7 @@ function buildEditData() {
   edit.points.renderOrder = 10; edit.points.raycast = () => {};
   edit.obj.mesh.add(edit.points);
   buildOverlay();
+  buildMirrorMap(); buildMirrorPlane();   // antes de pintar: a pintura usa os pares do espelho
   syncPoints(); paintPoints();
   rebuildEdgeLines(); updateEditVisibility();
 }
@@ -992,7 +1002,7 @@ function paintPoints() {
   const col = edit.points.geometry.attributes.color, w = new Map(edit.prop ? edit.affected : []);
   for (let g = 0; g < edit.groups.length; g++) {
     let c = C_PT;
-    if (edit.sel.has(g)) c = C_SEL; else if (w.has(g)) c = tmpC.copy(C_PT).lerp(C_INF, 0.25 + 0.75 * w.get(g));
+    if (edit.sel.has(g)) c = C_SEL; else if (edit.mirror && edit.mir && edit.mir[g] >= 0 && edit.sel.has(edit.mir[g])) c = C_MIR; else if (w.has(g)) c = tmpC.copy(C_PT).lerp(C_INF, 0.25 + 0.75 * w.get(g));
     col.setXYZ(g, c.r, c.g, c.b);
   }
   col.needsUpdate = true;
@@ -1019,6 +1029,7 @@ function exitEdit() {
   if (edit.op) cancelOp();
   const m = edit.obj.mesh;
   for (const l of [edit.lineAll, edit.lineSel]) if (l) { m.remove(l); l.geometry.dispose(); }
+  if (edit.mirrorPlane) { m.remove(edit.mirrorPlane); edit.mirrorPlane.traverse(c => c.geometry?.dispose()); edit.mirrorPlane = null; }
   edit.lineAll = edit.lineSel = null;
   if (edit.points) { m.remove(edit.points); edit.points.geometry.dispose(); edit.points = null; }
   if (edit.wire) { m.remove(edit.wire); edit.wire.material.dispose(); edit.wire = null; }
@@ -1053,11 +1064,72 @@ function computeAffected() {
   }
   return res;
 }
-function setGroup(g, v) {
+function setRaw(g, v) {
   const gr = edit.groups[g], pos = edit.obj.mesh.geometry.attributes.position;
   gr.p.copy(v); for (const i of gr.idx) pos.setXYZ(i, v.x, v.y, v.z);
 }
+function setGroup(g, v) { setRaw(g, v); edit.changed.add(g); }
+
+/* ---------- Espelho (simetria): o que muda de um lado acontece igual, invertido, do outro ---------- */
+// Cada vértice ganha o seu par do outro lado do plano (no eixo escolhido, nas coordenadas do próprio objeto).
+// Depois de qualquer mudança (pincel, gizmo, ferramentas), o lado onde você está mexendo manda e o outro copia.
+// Vértices em cima do plano ficam presos nele, para a emenda do meio não abrir.
+function buildMirrorMap() {
+  const G = edit.groups, ax = edit.mirrorAxis, q = v => Math.round(v * 1000), key = p => q(p.x) + '_' + q(p.y) + '_' + q(p.z), map = new Map(), t = new THREE.Vector3();
+  G.forEach((g, i) => map.set(key(g.p), i));
+  edit.mir = Int32Array.from(G, g => { t.copy(g.p); t.setComponent(ax, -t.getComponent(ax)); const j = map.get(key(t)); return j === undefined ? -1 : j; });
+  edit.mirrorMissing = edit.mir.reduce((n, j) => n + (j < 0 ? 1 : 0), 0);
+}
+function mirrorPass() {
+  if (!edit.mirror || !edit.mir || !edit.changed.size) { edit.changed.clear(); return; }
+  const ax = edit.mirrorAxis, dom = edit.mirrorDom || 1, G = edit.groups, t = new THREE.Vector3();
+  const side = g => { const v = G[g].p.getComponent(ax); return Math.abs(v) < 1e-5 ? 0 : Math.sign(v); };
+  const reflect = g => t.copy(G[g].p).setComponent(ax, -G[g].p.getComponent(ax));
+  for (const g of edit.changed) {
+    const m = edit.mir[g]; if (m < 0) continue;
+    if (m === g) { if (G[g].p.getComponent(ax) !== 0) setRaw(g, t.copy(G[g].p).setComponent(ax, 0)); continue; }
+    if (side(g) === dom || side(g) === 0) setRaw(m, reflect(g));
+    else if (!edit.changed.has(m)) setRaw(g, reflect(m));
+  }
+  edit.changed.clear();
+}
+// lado que "manda": onde está o ponto em que você está mexendo (coordenadas do objeto)
+function mirrorSideOf(pWorld) {
+  const v = pWorld.clone().applyMatrix4(edit.obj.mesh.matrixWorld.clone().invert()).getComponent(edit.mirrorAxis);
+  return v < 0 ? -1 : 1;
+}
+function mirrorWorld(pWorld) {
+  const mw = edit.obj.mesh.matrixWorld, v = pWorld.clone().applyMatrix4(mw.clone().invert());
+  v.setComponent(edit.mirrorAxis, -v.getComponent(edit.mirrorAxis));
+  return v.applyMatrix4(mw);
+}
+const mirrorMat = new THREE.MeshBasicMaterial({ color: 0xb07cff, transparent: true, opacity: 0.1, side: THREE.DoubleSide, depthWrite: false });
+const mirrorEdgeMat = new THREE.LineBasicMaterial({ color: 0xb07cff, transparent: true, opacity: 0.7 });
+function buildMirrorPlane() {
+  const m = edit.obj && edit.obj.mesh; if (!m) return;
+  if (edit.mirrorPlane) { m.remove(edit.mirrorPlane); edit.mirrorPlane.traverse(c => c.geometry?.dispose()); edit.mirrorPlane = null; }
+  if (!edit.mirror) return;
+  m.geometry.computeBoundingBox();
+  const bb = m.geometry.boundingBox, size = bb.getSize(new THREE.Vector3()).multiplyScalar(1.15).addScalar(0.05), c = bb.getCenter(new THREE.Vector3()), ax = edit.mirrorAxis;
+  const g = new THREE.PlaneGeometry(ax === 0 ? size.z : size.x, ax === 1 ? size.z : size.y);
+  if (ax === 0) g.rotateY(Math.PI / 2); else if (ax === 1) g.rotateX(-Math.PI / 2);
+  const plane = noRay(new THREE.Mesh(g, mirrorMat)); plane.renderOrder = 3;
+  plane.add(noRay(new THREE.LineSegments(new THREE.EdgesGeometry(g), mirrorEdgeMat)));
+  c.setComponent(ax, 0); plane.position.copy(c);
+  edit.mirrorPlane = plane; m.add(plane);
+}
+function setMirror(on, axis = edit.mirrorAxis) {
+  edit.mirror = on; edit.mirrorAxis = axis;
+  const label = 'Espelho ' + 'XYZ'[axis];
+  for (const id of ['#btnMirror', '#bMirror']) { const b = $(id); if (b) { b.textContent = label; b.classList.toggle('hot', on); } }
+  if (state.mode !== 'edit') return;
+  buildMirrorMap(); buildMirrorPlane(); paintPoints(); renderPanel();
+  if (on) toast(edit.mirrorMissing
+    ? `Espelho em ${'XYZ'[axis]} ligado. Atenção: ${edit.mirrorMissing} vértice(s) não têm par do outro lado (a peça não é simétrica nesse eixo) e ficam sem espelho.`
+    : `Espelho em ${'XYZ'[axis]} ligado: tudo que você fizer de um lado acontece igual do outro. O lilás mostra o que vai se mexer por tabela.`);
+}
 function finishGeo() {
+  mirrorPass();
   const geo = edit.obj.mesh.geometry;
   geo.attributes.position.needsUpdate = true; geo.computeVertexNormals(); geo.computeBoundingBox(); geo.computeBoundingSphere();
   syncPoints(); rebuildEdgeLines();
@@ -1098,6 +1170,7 @@ const EDIT_TOOLS = {
 };
 function runEditTool(name, arg) {
   if (state.mode !== 'edit') return;
+  if (edit.sel.size) { const c = new THREE.Vector3(); edit.sel.forEach(g => c.add(edit.groups[g].p)); edit.mirrorDom = c.getComponent(edit.mirrorAxis) < 0 ? -1 : 1; } else edit.mirrorDom = 1;
   if (EDIT_TOOLS[name](arg) === false) return;
   finishGeo(); markModified(); edit.affected = edit.prop ? computeAffected() : []; paintPoints(); placePivot(); commit();
 }
@@ -1105,7 +1178,14 @@ function subdivide() {
   if (state.mode !== 'edit') return;
   const geo = edit.obj.mesh.geometry, ix = geo.index.array;
   if (ix.length / 3 > 60000) { toast('Malha já está bem densa; subdividir de novo deixaria o navegador lento.'); return; }
-  const pos = geo.attributes.position, uv = geo.attributes.uv;
+  const ng = subdivideGeometry(geo), out = ng.index.array;
+  edit.obj.mesh.geometry.dispose(); edit.obj.mesh.geometry = ng; edit.wire.geometry = ng;
+  edit.sel.clear(); markModified(); buildEditData(); selectionChanged(); commit();
+  toast(`Malha subdividida: ${out.length / 3} triângulos.`);
+}
+// cada triângulo vira 4 (pontos no meio das arestas); a forma não muda, só ganha vértices
+function subdivideGeometry(geo) {
+  const ix = geo.index.array, pos = geo.attributes.position, uv = geo.attributes.uv;
   const P = Array.from(pos.array), U = uv ? Array.from(uv.array) : null, mid = new Map(), out = [];
   const m = (a, b) => {
     const k = a < b ? a + '_' + b : b + '_' + a; let r = mid.get(k);
@@ -1116,10 +1196,60 @@ function subdivide() {
     const a = ix[t], b = ix[t + 1], c = ix[t + 2], ab = m(a, b), bc = m(b, c), ca = m(c, a);
     out.push(a, ab, ca, ab, b, bc, ca, bc, c, ab, bc, ca);
   }
-  const ng = buildGeometry({ prim: 'custom' }, { position: P, uv: U, index: out });
-  edit.obj.mesh.geometry.dispose(); edit.obj.mesh.geometry = ng; edit.wire.geometry = ng;
-  edit.sel.clear(); markModified(); buildEditData(); selectionChanged(); commit();
-  toast(`Malha subdividida: ${out.length / 3} triângulos.`);
+  return buildGeometry({ prim: 'custom' }, { position: P, uv: U, index: out });
+}
+
+/* ---------- Arredondar quinas ---------- */
+// Refina a malha até as arestas ficarem bem menores que o raio e alisa (suavização de Taubin, que quase não
+// encolhe a peça). Nas partes retas a média dos vizinhos cai no mesmo plano, então elas continuam retas: só as
+// dobras viram curva. Com arestas/vértices selecionados, arredonda só perto deles; sem seleção, a peça toda.
+// Na região arredondada os vértices são soldados, para a luz deslizar sem marcar a antiga quina.
+function roundCorners() {
+  if (state.mode !== 'edit') return;
+  const mesh = edit.obj.mesh, sc = meshScale(mesh), r = edit.roundR / sc, T = topo(), G = edit.groups;
+  // região: vértices e arestas selecionados (guardados antes de refinar, porque a malha vai mudar)
+  const selPts = [...edit.sel].map(g => G[g].p.clone()), selSegs = [];
+  if (edit.sel.size) for (const k of T.edgeTris.keys()) { const a = Math.floor(k / EK), b = k % EK; if (!T.diag.has(k) && edit.sel.has(a) && edit.sel.has(b)) selSegs.push([G[a].p.clone(), G[b].p.clone()]); }
+  let L = 0, ne = 0;
+  for (const k of T.edgeTris.keys()) { if (T.diag.has(k)) continue; L += G[Math.floor(k / EK)].p.distanceTo(G[k % EK].p); ne++; }
+  L = ne ? L / ne : r;
+  let geo = mesh.geometry, tris = geo.index.count / 3, k = 0;
+  while (L / 2 ** k > r / 3 && k < 5 && tris * 4 ** (k + 1) <= 160000) k++;
+  for (let i = 0; i < k; i++) { const ng = subdivideGeometry(geo); if (geo !== mesh.geometry) geo.dispose(); geo = ng; }
+  if (geo !== mesh.geometry) { mesh.geometry.dispose(); mesh.geometry = geo; edit.wire.geometry = geo; }
+  edit.sel.clear(); buildEditData();
+  const N = edit.groups.length, el2 = L / 2 ** k;
+  // peso de cada vértice: 1 perto da seleção, sumindo até 1,5 raio (sem seleção, todos = 1)
+  const w = new Float32Array(N).fill(1);
+  if (selPts.length) {
+    const seg = new THREE.Line3(), q = new THREE.Vector3(), reach = r * 1.5;
+    for (let g = 0; g < N; g++) {
+      const p = edit.groups[g].p; let d = Infinity;
+      for (const s of selPts) d = Math.min(d, p.distanceTo(s));
+      for (const [a, b] of selSegs) { seg.set(a, b); seg.closestPointToPoint(p, true, q); d = Math.min(d, p.distanceTo(q)); }
+      const t = Math.max(0, 1 - d / reach); w[g] = t * t * (3 - 2 * t);
+    }
+  }
+  // quanto mais iterações, maior a curva: a "difusão" anda ~ raiz(iterações) arestas
+  const iters = Math.max(3, Math.min(300, Math.round((r / (0.7 * el2)) ** 2)));
+  let P = edit.groups.map(g => g.p.clone());
+  const nb = edit.nb.map(s => [...s]);
+  const pass = f => { const next = P.map((p, g) => { if (!w[g] || !nb[g].length) return p; const avg = new THREE.Vector3(); for (const n of nb[g]) avg.add(P[n]); avg.divideScalar(nb[g].length); return p.clone().addScaledVector(avg.sub(p), f * w[g]); }); P = next; };
+  for (let i = 0; i < iters; i++) { pass(0.5); pass(-0.53); }
+  // solda a região arredondada (um vértice por posição, com o UV do primeiro) para o sombreado ficar liso
+  const old = mesh.geometry, pos = old.attributes.position, uv = old.attributes.uv, ix = old.index.array, v2g = edit.v2g;
+  const NP = [], NU = [], rep = new Map(), map = new Int32Array(pos.count);
+  for (let i = 0; i < pos.count; i++) {
+    const g = v2g[i], p = P[g], weld = w[g] > 0;
+    if (weld && rep.has(g)) { map[i] = rep.get(g); continue; }
+    map[i] = NP.length / 3; NP.push(p.x, p.y, p.z); NU.push(uv ? uv.getX(i) : 0, uv ? uv.getY(i) : 0);
+    if (weld) rep.set(g, map[i]);
+  }
+  const NI = Array.from(ix, i => map[i]);
+  const ng = buildGeometry({ prim: 'custom' }, { position: NP, uv: NU, index: NI });
+  old.dispose(); mesh.geometry = ng; edit.wire.geometry = ng;
+  markModified(); buildEditData(); selectionChanged(); commit();
+  toast(`Quinas arredondadas (raio ${(Math.round(edit.roundR * 1000) / 10).toLocaleString('pt-BR')} cm${selPts.length ? ', só perto da seleção' : ''}). ${(ng.index.count / 3).toLocaleString('pt-BR')} triângulos.`);
 }
 
 /* ================= Topologia: arestas, faces, extrudar e cortar ================= */
@@ -1528,6 +1658,10 @@ const ringMat = o => new THREE.MeshBasicMaterial({ color: o, transparent: true, 
 const brushCursor = new THREE.Group(), ringOuter = new THREE.Mesh(ringGeo, ringMat(0xffffff)), ringCore = new THREE.Mesh(ringGeo, ringMat(0x5fb4ff));
 [ringOuter, ringCore].forEach(r => { r.renderOrder = 20; r.raycast = () => {}; });
 brushCursor.add(ringOuter, ringCore); brushCursor.visible = false; scene.add(brushCursor);
+// anel lilás do lado espelhado, acompanhando o de verdade
+const brushCursorM = new THREE.Group(), ringOuterM = new THREE.Mesh(ringGeo, ringMat(0xb07cff)), ringCoreM = new THREE.Mesh(ringGeo, ringMat(0xb07cff));
+[ringOuterM, ringCoreM].forEach(r => { r.renderOrder = 20; r.raycast = () => {}; });
+brushCursorM.add(ringOuterM, ringCoreM); brushCursorM.visible = false; scene.add(brushCursorM);
 const _w = new THREE.Vector3(), _n = new THREE.Vector3(), Z = new THREE.Vector3(0, 0, 1);
 
 function brushFalloff(t) {
@@ -1556,6 +1690,13 @@ function placeCursor(hit) {
   brushCursor.scale.setScalar(brush.radius);
   ringCore.scale.setScalar(Math.max(0.03, brush.hardness)); ringCore.visible = brush.hardness > 0.02;
   brushCursor.visible = true;
+  if (edit.mirror) {
+    const mw = edit.obj.mesh.matrixWorld, nL = hit.face.normal.clone(); nL.setComponent(edit.mirrorAxis, -nL.getComponent(edit.mirrorAxis));
+    brushCursorM.position.copy(mirrorWorld(hit.point));
+    brushCursorM.quaternion.setFromUnitVectors(Z, nL.transformDirection(mw));
+    brushCursorM.scale.setScalar(brush.radius);
+    ringCoreM.scale.setScalar(Math.max(0.03, brush.hardness)); ringCoreM.visible = ringCore.visible;
+  }
 }
 function setBrush(on, silent) {
   if (on && state.mode !== 'edit') { if (!state.selected) { toast('Selecione um objeto para esculpir.'); return; } enterEdit(); }
@@ -1589,6 +1730,13 @@ function startStroke(hit, e) {
     st.origW = st.weights.map(([g]) => edit.groups[g].p.clone().applyMatrix4(mesh.matrixWorld));
     st.plane = new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()).negate(), hit.point);
     st.start = hit.point.clone();
+    if (edit.mirror) {
+      edit.mirrorDom = mirrorSideOf(hit.point);
+      // o lado espelhado é agarrado também e anda espelhado
+      const mine = new Set(st.weights.map(([g]) => g));
+      st.weightsM = brushWeights(mirrorWorld(hit.point)).filter(([g]) => !mine.has(g));
+      st.origWM = st.weightsM.map(([g]) => edit.groups[g].p.clone().applyMatrix4(mesh.matrixWorld));
+    }
     paintOverlay(st.weights, C_BRUSH, 0.5);
   } else applyDab(hit, e);
   placeCursor(hit);
@@ -1647,22 +1795,39 @@ function dyntopoSplit(centerWorld, radiusWorld) {
 }
 function applyDab(hit, e) {
   const st = brush.stroke, mesh = edit.obj.mesh;
-  if (brush.dyntopo && brush.mode !== 'smooth' && brush.mode !== 'flatten') dyntopoSplit(hit.point, brush.radius);
+  if (brush.dyntopo && brush.mode !== 'smooth' && brush.mode !== 'flatten') {
+    dyntopoSplit(hit.point, brush.radius);
+    if (edit.mirror) dyntopoSplit(mirrorWorld(hit.point), brush.radius);   // a malha nova nasce dos dois lados
+  }
+  if (edit.mirror) edit.mirrorDom = mirrorSideOf(hit.point);
   const sc = meshScale(mesh);
   const sign = brush.invert !== !!(e.ctrlKey || e.metaKey) ? -1 : 1;
-  const wts = brushWeights(hit.point), step = brush.strength * brush.radius * 0.1 / sc;
+  const step = brush.strength * brush.radius * 0.1 / sc;
   st.normal.lerp(hit.face.normal, 0.3).normalize();
-  const n = st.normal;
-  if (brush.mode === 'draw') for (const [g, w] of wts) setGroup(g, _w.copy(edit.groups[g].p).addScaledVector(n, step * w * sign));
-  else if (brush.mode === 'inflate') for (const [g, w] of wts) setGroup(g, _w.copy(edit.groups[g].p).addScaledVector(groupNormal(g), step * w * sign));
-  else if (brush.mode === 'smooth') {
-    const next = wts.map(([g, w]) => { const avg = new THREE.Vector3(), nb = edit.nb[g]; nb.forEach(k => avg.add(edit.groups[k].p)); if (nb.size) avg.divideScalar(nb.size); else avg.copy(edit.groups[g].p); return [g, edit.groups[g].p.clone().lerp(avg, Math.min(1, brush.strength * w))]; });
-    next.forEach(([g, v]) => setGroup(g, v));
-  } else if (brush.mode === 'flatten') {
-    const c = hit.point.clone().applyMatrix4(st.inv);
-    for (const [g, w] of wts) { const p = _w.copy(edit.groups[g].p); setGroup(g, p.addScaledVector(n, -p.clone().sub(c).dot(n) * Math.min(1, brush.strength * w * 0.6))); }
+  // com espelho, a pincelada acontece também no ponto espelhado (com a normal espelhada), como no Blender:
+  // funciona mesmo quando a malha não tem um vértice-par exato do outro lado
+  const dabs = [[hit.point, st.normal]];
+  if (edit.mirror) { const nM = st.normal.clone(); nM.setComponent(edit.mirrorAxis, -nM.getComponent(edit.mirrorAxis)); dabs.push([mirrorWorld(hit.point), nM]); }
+  const allW = [];
+  for (const [pt, n] of dabs) {
+    const wts = brushWeights(pt); allW.push(...wts);
+    if (brush.mode === 'draw') for (const [g, w] of wts) setGroup(g, _w.copy(edit.groups[g].p).addScaledVector(n, step * w * sign));
+    else if (brush.mode === 'inflate') for (const [g, w] of wts) setGroup(g, _w.copy(edit.groups[g].p).addScaledVector(groupNormal(g), step * w * sign));
+    else if (brush.mode === 'smooth') {
+      const next = wts.map(([g, w]) => { const avg = new THREE.Vector3(), nb = edit.nb[g]; nb.forEach(k => avg.add(edit.groups[k].p)); if (nb.size) avg.divideScalar(nb.size); else avg.copy(edit.groups[g].p); return [g, edit.groups[g].p.clone().lerp(avg, Math.min(1, brush.strength * w))]; });
+      next.forEach(([g, v]) => setGroup(g, v));
+    } else if (brush.mode === 'flatten') {
+      const c = pt.clone().applyMatrix4(st.inv);
+      for (const [g, w] of wts) { const p = _w.copy(edit.groups[g].p); setGroup(g, p.addScaledVector(n, -p.clone().sub(c).dot(n) * Math.min(1, brush.strength * w * 0.6))); }
+    }
   }
-  finishGeo(); paintOverlay(wts, C_BRUSH, 0.45);
+  finishGeo(); paintOverlay(allW, C_BRUSH, 0.45);
+}
+// direção (vetor) refletida no plano do espelho, em coordenadas do mundo
+function mirrorDirWorld(dWorld) {
+  const mw = edit.obj.mesh.matrixWorld, toL = new THREE.Matrix3().setFromMatrix4(mw.clone().invert()), toW = new THREE.Matrix3().setFromMatrix4(mw);
+  const v = dWorld.clone().applyMatrix3(toL); v.setComponent(edit.mirrorAxis, -v.getComponent(edit.mirrorAxis));
+  return v.applyMatrix3(toW);
 }
 function moveStroke(e) {
   const st = brush.stroke;
@@ -1672,6 +1837,7 @@ function moveStroke(e) {
     const cur = ray.ray.intersectPlane(st.plane, new THREE.Vector3()); if (!cur) return;
     const delta = cur.sub(st.start);
     st.weights.forEach(([g, w], i) => setGroup(g, _w.copy(st.origW[i]).addScaledVector(delta, w).applyMatrix4(st.inv)));
+    if (st.weightsM) { const dM = mirrorDirWorld(delta); st.weightsM.forEach(([g, w], i) => setGroup(g, _w.copy(st.origWM[i]).addScaledVector(dM, w).applyMatrix4(st.inv))); }
     finishGeo();
     brushCursor.position.copy(st.start).add(delta);
     st.delta = delta.clone();
@@ -1760,6 +1926,7 @@ transform.addEventListener('dragging-changed', e => {
     edit.startInv.copy(edit.pivot.matrixWorld).invert();
     edit.orig = edit.groups.map(g => g.p.clone());
     edit.affected = computeAffected();
+    edit.mirrorDom = mirrorSideOf(edit.pivot.position);
   }
   if (e.value && transform.object === multiPivot) {
     multiPivot.updateMatrixWorld(); multiStartInv.copy(multiPivot.matrixWorld).invert();
@@ -2005,6 +2172,9 @@ const DB = {
         r.onupgradeneeded = () => r.result.createObjectStore('projects', { keyPath: 'id' });
         r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
       });
+      // sem servidor (Vercel, artifact), os projetos só existem neste navegador: pede para ele não apagar
+      // esses dados quando faltar espaço (no Safari também reduz a limpeza automática de sites pouco usados)
+      this.persisted = await navigator.storage?.persist?.().catch(() => false) ?? false;
     } catch (e) { this.db = null; }
   },
   run(mode, fn) { return new Promise((res, rej) => { const tx = this.db.transaction('projects', mode); const r = fn(tx.objectStore('projects')); tx.oncomplete = () => res(r && r.result); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error); }); },
@@ -2088,6 +2258,10 @@ async function renderProjects() {
   const list = (await DB.all()).sort((a, b) => (b.updated || 0) - (a.updated || 0)), box = $('#plist');
   box.replaceChildren();
   if (!DB.db && !DB.server) box.append(el('p', { class: 'note', style: 'grid-column:1/-1' }, 'O navegador bloqueou o armazenamento local: os projetos ficam só nesta aba. Use Exportar › Projeto Forja para guardar uma cópia.'));
+  else if (!DB.server) box.append(el('p', { class: 'note', style: 'grid-column:1/-1;border:1px solid var(--line);border-radius:8px;padding:8px 10px' },
+    'Seus projetos ficam guardados neste navegador, neste aparelho. Eles não aparecem em outro navegador ou celular e somem se você limpar os dados do site. ',
+    'De vez em quando, faça um backup: abra o projeto e use ', el('b', {}, 'Exportar › Projeto Forja (.json)'), '. Para abrir em outro lugar, use ', el('b', {}, 'Abrir .json'), ' aqui em cima.',
+    DB.persisted ? ' (O navegador aceitou guardar esses dados de forma permanente.)' : ''));
   for (const p of list) {
     const cur = state.meta && p.id === state.meta.id;
     let confirming = false;
@@ -2113,7 +2287,8 @@ async function renderProjects() {
 function download(blob, name) {
   const a = el('a', { href: URL.createObjectURL(blob), download: name }); document.body.append(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
-  toast(`Baixando ${name}. Se nada acontecer, abra a Forja como arquivo local (index.html) para exportar.`);
+  // dentro do artifact do Claude o download é bloqueado; no site, no app instalado e no local funciona normal
+  toast(/claude\.(ai|site)|claudeusercontent/.test(location.hostname) ? `Baixando ${name}. Se nada acontecer, use a Forja pelo site ou pelo app instalado para exportar.` : `Baixando ${name}.`);
 }
 const fileBase = () => (state.meta?.name || 'projeto').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\w-]+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'projeto';
 function exportJson() {
@@ -2379,6 +2554,19 @@ function renderEditTab(box) {
       el('button', { class: 'btn', onclick: () => runEditTool('flatten') }, 'Achatar'))));
   const cm = v => (Math.round(v * 1000) / 10).toLocaleString('pt-BR') + ' cm';
   box.append(el('div', { class: 'grp' },
+    el('h4', {}, 'Simetria (espelho)'),
+    el('div', { class: 'btns', style: 'align-items:center' },
+      check('f-mirror', 'Espelhar o que eu fizer', edit.mirror, v => setMirror(v)),
+      el('div', { class: 'seg' }, [0, 1, 2].map(a => el('button', { class: edit.mirrorAxis === a ? 'on' : '', onclick: () => setMirror(true, a) }, 'XYZ'[a])))),
+    el('p', { class: 'note' }, edit.mirror
+      ? (edit.mirrorMissing ? `${edit.mirrorMissing} vértice(s) sem par do outro lado: a peça não é simétrica nesse eixo e eles ficam sem espelho.` : 'Pincel, gizmo e ferramentas valem dos dois lados. O plano lilás é o espelho; o lilás nos vértices mostra o que vai se mexer por tabela.')
+      : 'Bom para rostos e peças simétricas: o lado oposto acompanha tudo, invertido. Tecla M.')));
+  box.append(el('div', { class: 'grp' },
+    el('h4', {}, 'Arredondar quinas'),
+    el('p', { class: 'note' }, n ? 'Arredonda as dobras perto do que está selecionado.' : 'Sem seleção, arredonda todas as dobras da peça. As partes retas continuam retas.'),
+    field('Raio', slider('f-round', edit.roundR, 0.01, 0.5, 0.005, v => edit.roundR = v, cm, true)),
+    el('div', { class: 'btns' }, el('button', { class: 'btn', onclick: roundCorners }, 'Arredondar'))));
+  box.append(el('div', { class: 'grp' },
     el('h4', {}, 'Unir vértices'),
     el('p', { class: 'note' }, n ? 'Vale para os vértices selecionados.' : 'Sem seleção, vale para a malha toda: fecha frestas e emendas soltas.'),
     field('Distância', slider('f-weld', edit.weldDist, 0.001, 0.2, 0.001, v => edit.weldDist = v, cm, true)),
@@ -2576,6 +2764,8 @@ $('#btnBrush').onclick = () => setBrush(!brush.on);
 document.querySelectorAll('#selModeSeg [data-sm]').forEach(b => b.onclick = () => setSelMode(b.dataset.sm));
 $('#btnExtrude').onclick = () => startExtrude();
 $('#btnCut').onclick = e => startLoopCut(e.shiftKey ? 2 : 1);
+$('#btnMirror').onclick = () => setMirror(!edit.mirror);
+$('#bMirror').onclick = () => setMirror(!edit.mirror);
 document.querySelectorAll('#brushModes button').forEach(b => b.onclick = () => { brush.mode = b.dataset.bm; syncBrushBar(); refreshStatus(); });
 $('#bSize').oninput = e => { brush.radius = +e.target.value; syncBrushBar(); if (brushCursor.visible) brushCursor.scale.setScalar(brush.radius); };
 $('#bStr').oninput = e => { brush.strength = +e.target.value; syncBrushBar(); };
@@ -2721,6 +2911,7 @@ window.addEventListener('keydown', e => {
     case 'b': toggleBox(); break;
     case 'p': setBrush(!brush.on); break;
     case 'e': startExtrude(); break;
+    case 'm': if (state.mode === 'edit') setMirror(!edit.mirror); break;
     case 'c': startLoopCut(e.shiftKey ? 2 : 1); break;
     case '[': if (brush.on) { brush.radius = Math.max(0.03, +(brush.radius / 1.15).toFixed(3)); syncBrushBar(); } break;
     case ']': if (brush.on) { brush.radius = Math.min(2.5, +(brush.radius * 1.15).toFixed(3)); syncBrushBar(); } break;
@@ -2744,6 +2935,7 @@ renderer.setAnimationLoop(() => {
   orbit.update();
   if (boxHelper.visible && state.selected) boxHelper.update();
   for (const b of multiBoxes) b.update();
+  brushCursorM.visible = brushCursor.visible && edit.mirror && state.mode === 'edit';
   placeAbTags();
   renderer.render(scene, camera);
 });
